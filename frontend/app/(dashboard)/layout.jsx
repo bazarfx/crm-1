@@ -12,6 +12,7 @@ export default function DashboardLayout({ children }) {
   const router = useRouter();
   const { hydrated, isAuthenticated } = useAuth();
   const fetchConfig = useStore((s) => s.fetchConfig);
+  const fetchPermissions = useStore((s) => s.fetchPermissions);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
@@ -19,8 +20,22 @@ export default function DashboardLayout({ children }) {
   }, [hydrated, isAuthenticated, router]);
 
   useEffect(() => {
-    if (isAuthenticated) fetchConfig();
-  }, [isAuthenticated, fetchConfig]);
+    if (isAuthenticated) {
+      fetchConfig();
+      fetchPermissions();
+    }
+  }, [isAuthenticated, fetchConfig, fetchPermissions]);
+
+  // Re-fetch permissions whenever the tab becomes visible — keeps a long-lived
+  // session in sync with edits made in another tab.
+  useEffect(() => {
+    if (!isAuthenticated) return undefined;
+    const onVisibility = () => {
+      if (!document.hidden) fetchPermissions();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [isAuthenticated, fetchPermissions]);
 
   if (!hydrated || !isAuthenticated) {
     return (

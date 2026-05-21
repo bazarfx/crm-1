@@ -12,6 +12,8 @@ router.use('/reports', require('./reports'));
 router.use('/config', require('./config'));
 router.use('/settings', require('./settings'));
 router.use('/audit-logs', require('./auditLogs'));
+router.use('/permissions', require('./permissions'));
+router.use('/role-permissions', require('./rolePermissions'));
 
 router.get('/ping', (req, res) => res.json({ success: true, message: 'pong', data: { time: new Date().toISOString() } }));
 

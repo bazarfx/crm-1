@@ -10,9 +10,12 @@ export const useStore = create()(
     (set, get) => ({
       user: null,
       config: {},
+      permissions: null, // { [permission_key]: 'all'|'own'|'group'|'read'|'none' }
+      isSuperAdmin: false,
       isLoading: false,
       hydrated: false,
       configLoaded: false,
+      permissionsLoaded: false,
 
       setUser: (user) => set({ user }),
       markHydrated: () => set({ hydrated: true }),
@@ -37,8 +40,50 @@ export const useStore = create()(
       logout: async () => {
         try { await api.post('/auth/logout'); } catch { /* silent */ }
         clearTokens();
-        set({ user: null, config: {}, configLoaded: false });
+        set({
+          user: null,
+          config: {},
+          configLoaded: false,
+          permissions: null,
+          permissionsLoaded: false,
+          isSuperAdmin: false,
+        });
         if (typeof window !== 'undefined') window.location.href = '/login';
+      },
+
+      /**
+       * Fetch the calling user's full permission map. Re-runnable; callers
+       * (e.g. the visibilitychange hook in dashboard layout) invoke this on
+       * tab focus so changes pushed from the permissions UI propagate quickly.
+       */
+      fetchPermissions: async () => {
+        try {
+          const res = await api.get('/permissions/me');
+          const data = unwrap(res) || {};
+          set({
+            permissions: data.permissions || {},
+            isSuperAdmin: !!data.is_super_admin,
+            permissionsLoaded: true,
+          });
+          return data.permissions || {};
+        } catch {
+          return get().permissions || {};
+        }
+      },
+
+      /** Synchronous permission check against the cached map. */
+      hasPermission: (key) => {
+        const { isSuperAdmin, permissions } = get();
+        if (isSuperAdmin) return true;
+        const level = permissions?.[key];
+        return Boolean(level) && level !== 'none';
+      },
+
+      /** Returns the level string for a permission key, defaulting to 'none'. */
+      permissionLevel: (key) => {
+        const { isSuperAdmin, permissions } = get();
+        if (isSuperAdmin) return 'all';
+        return permissions?.[key] || 'none';
       },
 
       fetchConfig: async () => {

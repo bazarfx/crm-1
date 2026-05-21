@@ -1,160 +1,130 @@
-// PERMISSION MATRIX — single source of truth for every role × feature.
-// Values per role: 'all' | 'own' | 'group' | 'read' | false
-//   'all'   → full access across the dataset
-//   'group' → scoped to records owned by the user's group(s)
-//   'own'   → scoped to records owned by the user
-//   'read'  → read-only access (value of read scope is implicit per perm)
-//   false   → denied
+/**
+ * Dynamic permissions — DB-backed via the RolePermission model.
+ *
+ * Three layers of lockout protection for super_admin:
+ *   Layer 1 — Sequelize beforeUpdate / beforeDestroy / beforeBulkUpdate hooks
+ *             on the RolePermission model (utils-level safety net).
+ *   Layer 2 — This file: every public helper short-circuits to 'all' / true
+ *             for the super_admin role BEFORE reading the DB. The cache
+ *             never contains a super_admin override.
+ *   Layer 3 — The role-permissions controller rejects API requests that
+ *             target the super_admin role with HTTP 403.
+ *
+ * Cache strategy: a single in-memory map of `${role}:${permission_key}` → level,
+ * refreshed every 60 s. Mutations call invalidateCache() so changes propagate
+ * immediately within the same process. For multi-process deploys the 60 s TTL
+ * provides an upper-bound staleness guarantee.
+ */
 
-const PERMISSIONS = {
-  // ── LEADS ─────────────────────────────────────────────────────
-  'leads.view': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'group', tele_sales: 'own', back_office: 'read', auditor: 'read', archive: false,
-  },
-  'leads.create': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'leads.edit': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'group', tele_sales: 'own', back_office: false, auditor: false, archive: false,
-  },
-  'leads.delete': {
-    super_admin: 'all', admin: false, floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'leads.reassign': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'group', tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'leads.export': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'group', tele_sales: false, back_office: false, auditor: 'read', archive: false,
-  },
-  'leads.add_activity': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'group', tele_sales: 'own', back_office: false, auditor: false, archive: false,
-  },
+const { RolePermission } = require('../models');
+const { PERMISSION_DEFINITIONS } = require('./permissionDefaults');
 
-  // ── USERS ─────────────────────────────────────────────────────
-  'users.view': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'group', tele_sales: false, back_office: false, auditor: 'read', archive: false,
-  },
-  'users.create': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'users.edit': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'users.delete': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
+const SUPER_ADMIN_ROLE = 'super_admin';
+const CACHE_TTL_MS = 60 * 1000;
 
-  // ── GROUPS ────────────────────────────────────────────────────
-  'groups.view': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'group', tele_sales: 'group', back_office: false, auditor: 'read', archive: false,
-  },
-  'groups.create': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'groups.edit': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'groups.manage_members': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
+let permissionsCache = null;
+let cacheLoadedAt = 0;
 
-  // ── CAMPAIGNS ─────────────────────────────────────────────────
-  'campaigns.view': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'group', tele_sales: false, back_office: false, auditor: 'read', archive: false,
-  },
-  'campaigns.create': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'campaigns.edit': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
+const buildKey = (role, permissionKey) => `${role}:${permissionKey}`;
 
-  // ── REPORTS ───────────────────────────────────────────────────
-  'reports.own_dashboard': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'all', tele_sales: 'own', back_office: 'read', auditor: 'read', archive: false,
-  },
-  'reports.team': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: 'group', tele_sales: 'group', back_office: 'read', auditor: 'read', archive: false,
-  },
-  'reports.full': {
-    super_admin: 'all', admin: 'all', floor_manager: 'all',
-    senior: false, tele_sales: false, back_office: 'read', auditor: 'read', archive: false,
-  },
+async function loadCache() {
+  const rows = await RolePermission.findAll({
+    attributes: ['role', 'permission_key', 'level'],
+    raw: true,
+  });
+  const map = Object.create(null);
+  for (const r of rows) {
+    map[buildKey(r.role, r.permission_key)] = r.level;
+  }
+  permissionsCache = map;
+  cacheLoadedAt = Date.now();
+}
 
-  // ── SETTINGS ──────────────────────────────────────────────────
-  'settings.assignment_rules': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'settings.system': {
-    super_admin: 'all', admin: false, floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'settings.config_values': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
+async function ensureCache() {
+  if (!permissionsCache || Date.now() - cacheLoadedAt > CACHE_TTL_MS) {
+    await loadCache();
+  }
+}
 
-  // ── ADMIN / SYSTEM ────────────────────────────────────────────
-  'adminjs.access': {
-    super_admin: 'all', admin: false, floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: false, archive: false,
-  },
-  'audit_logs.view': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: false, auditor: 'read', archive: false,
-  },
-  'ark_logs.view': {
-    super_admin: 'all', admin: 'all', floor_manager: false,
-    senior: false, tele_sales: false, back_office: 'read', auditor: 'read', archive: false,
-  },
-};
+function invalidateCache() {
+  permissionsCache = null;
+  cacheLoadedAt = 0;
+}
 
-// True if the user can perform the action; for 'own' scope, require ownerId === userId.
-function can(userRole, permission, ownerId = null, userId = null) {
-  const perm = PERMISSIONS[permission];
-  if (!perm) return false;
-  const level = perm[userRole];
-  if (!level) return false;
+/**
+ * Get the access level for a (role, permission) pair.
+ *   Returns one of: 'all' | 'own' | 'group' | 'read' | 'none'
+ *   super_admin always returns 'all' without hitting the DB (Layer 2).
+ */
+async function getLevel(userRole, permissionKey) {
+  if (userRole === SUPER_ADMIN_ROLE) return 'all';
+  await ensureCache();
+  return permissionsCache[buildKey(userRole, permissionKey)] || 'none';
+}
+
+/**
+ * Boolean check: does the role have permission?
+ *   - 'all' / 'read' / 'group' → true
+ *   - 'own' → true ONLY if (ownerId, userId) match
+ *   - 'none' or undefined → false
+ */
+async function can(userRole, permissionKey, ownerId = null, userId = null) {
+  if (userRole === SUPER_ADMIN_ROLE) return true;
+  const level = await getLevel(userRole, permissionKey);
+  if (!level || level === 'none') return false;
   if (level === 'all') return true;
-  if (level === 'read') return true; // distinguish writes via a separate canWrite check
-  if (level === 'own') return ownerId && userId && String(ownerId) === String(userId);
-  if (level === 'group') return true; // group scoping applied in query layer
+  if (level === 'read') return true;
+  if (level === 'group') return true; // group-scoped filtering must be applied in the query layer
+  if (level === 'own') {
+    return Boolean(ownerId) && Boolean(userId) && ownerId.toString() === userId.toString();
+  }
   return false;
 }
 
-// True if the user has any level on this permission (used for read-only menu visibility).
-function canRead(userRole, permission) {
-  const perm = PERMISSIONS[permission];
-  if (!perm) return false;
-  return !!perm[userRole];
+/** Read-only check: any non-'none' level counts as readable. */
+async function canRead(userRole, permissionKey) {
+  if (userRole === SUPER_ADMIN_ROLE) return true;
+  const level = await getLevel(userRole, permissionKey);
+  return !!level && level !== 'none';
 }
 
-// Returns the raw level ('all' | 'own' | 'group' | 'read' | false) for the role.
-function getLevel(userRole, permission) {
-  const perm = PERMISSIONS[permission];
-  if (!perm) return false;
-  return perm[userRole] || false;
+/**
+ * Get a complete map of every permission → level for a given role.
+ * super_admin gets a synthetic 'all' map for every key without hitting the DB.
+ */
+async function getAllForRole(userRole) {
+  if (userRole === SUPER_ADMIN_ROLE) {
+    const result = Object.create(null);
+    for (const [key] of PERMISSION_DEFINITIONS) result[key] = 'all';
+    return result;
+  }
+  await ensureCache();
+  const result = Object.create(null);
+  for (const [key] of PERMISSION_DEFINITIONS) {
+    result[key] = permissionsCache[buildKey(userRole, key)] || 'none';
+  }
+  return result;
 }
 
-module.exports = { PERMISSIONS, can, canRead, getLevel };
+/**
+ * Specific guard for role changes:
+ *   - You cannot promote anyone to super_admin
+ *   - You cannot demote the existing super_admin
+ *   - You cannot change your own role
+ *   - Otherwise, must hold the users.change_role permission
+ */
+async function canChangeRole(currentUser, targetUser, newRole) {
+  if (newRole === SUPER_ADMIN_ROLE) return false;
+  if (targetUser.role === SUPER_ADMIN_ROLE) return false;
+  if (currentUser.id === targetUser.id) return false;
+  return can(currentUser.role, 'users.change_role');
+}
+
+module.exports = {
+  getLevel,
+  can,
+  canRead,
+  getAllForRole,
+  canChangeRole,
+  invalidateCache,
+};

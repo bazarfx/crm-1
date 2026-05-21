@@ -14,6 +14,7 @@ const RoundRobinState = require('./RoundRobinState');
 const AuditLog = require('./AuditLog');
 const RefreshToken = require('./RefreshToken');
 const Setting = require('./Setting');
+const RolePermission = require('./RolePermission');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ASSOCIATIONS
@@ -105,6 +106,9 @@ User.hasMany(RefreshToken, { foreignKey: 'user_id', as: 'refreshTokens' });
 // Setting (audited last editor)
 Setting.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedBy' });
 
+// RolePermission (audited last editor)
+RolePermission.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedBy' });
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SYNC
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,4 +136,5 @@ module.exports = {
   AuditLog,
   RefreshToken,
   Setting,
+  RolePermission,
 };

@@ -435,6 +435,11 @@ async function main() {
   await seedArkLogs(leads);
   await seedIngestLogs(leads);
 
+  // Last step — populate role_permissions table for the dynamic
+  // permissions system (force re-seed on --force runs).
+  const { seedRolePermissions } = require('./seedRolePermissions');
+  await seedRolePermissions({ force });
+
   console.log('═══════════════════════════════════════════════════════════');
   console.log('  Seeding complete.');
   console.log('  Login with any email below + password: Test@1234');
