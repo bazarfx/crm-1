@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx *)",
+      "PowerShell(npx @swarmclawai/andrej-karpathy-skills --agent claude --dest \"$PWD\" 2>&1 | Out-String)"
+    ]
+  }
+}

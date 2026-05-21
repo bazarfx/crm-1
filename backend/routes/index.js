@@ -1,0 +1,18 @@
+const router = require('express').Router();
+
+router.use('/auth', require('./auth'));
+router.use('/users', require('./users'));
+router.use('/leads/ingest', require('./ingest')); // PUBLIC — must precede /leads
+router.use('/trial-leads', require('./trialLeads'));
+router.use('/leads', require('./leads'));
+router.use('/webhooks', require('./webhooks'));
+router.use('/groups', require('./groups'));
+router.use('/campaigns', require('./campaigns'));
+router.use('/reports', require('./reports'));
+router.use('/config', require('./config'));
+router.use('/settings', require('./settings'));
+router.use('/audit-logs', require('./auditLogs'));
+
+router.get('/ping', (req, res) => res.json({ success: true, message: 'pong', data: { time: new Date().toISOString() } }));
+
+module.exports = router;

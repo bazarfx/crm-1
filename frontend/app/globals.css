@@ -1,0 +1,246 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------
+ * Design Tokens — two coexisting systems:
+ *   1. Legacy CRM tokens (surface/ink/line/accent/status) — keep so
+ *      existing pages (login, leads, users, groups, campaigns…) work
+ *   2. shadcn HSL tokens (background/foreground/card/primary…) — used
+ *      by new dashboard / sidebar / topbar / shared components and
+ *      drive dark/light theming via .dark class
+ * ------------------------------------------------------------------ */
+
+@layer base {
+  :root {
+    /* ---------- shadcn — LIGHT ---------- */
+    --background: 210 40% 98%;
+    --foreground: 222.2 47.4% 11.2%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 47.4% 11.2%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 47.4% 11.2%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent-shadcn: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.75rem;
+
+    /* ---------- Legacy CRM (kept verbatim) ---------- */
+    --sidebar-bg: #0B1120;
+    --sidebar-hover: #141E30;
+    --sidebar-active-bg: #1E3A5F;
+    --sidebar-active-border: #4F8EF7;
+    --sidebar-text: #94A3B8;
+    --sidebar-text-active: #FFFFFF;
+
+    --bg-main: #F0F4FA;
+    --bg-surface: #FFFFFF;
+    --bg-surface-2: #F8FAFC;
+    --border-color: #E2E8F0;
+    --border-strong: #CBD5E1;
+
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-muted: #94A3B8;
+
+    --accent: #4F8EF7;
+    --accent-glow: rgba(79, 142, 247, 0.15);
+    --accent-hover: #3B7CE8;
+
+    --status-new: #6366F1;
+    --status-contacted: #3B82F6;
+    --status-interested: #8B5CF6;
+    --status-not-interested: #EF4444;
+    --status-call-back: #F59E0B;
+    --status-account-opened: #14B8A6;
+    --status-ftd-done: #10B981;
+    --status-cold: #6B7280;
+    --status-dnd: #DC2626;
+    --status-inactive: #9CA3AF;
+    --status-reactive: #F97316;
+
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+    --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.10);
+
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+  }
+
+  .dark {
+    /* ---------- shadcn — DARK ---------- */
+    --background: 222.2 47% 5%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 47% 7%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 47% 7%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 14%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent-shadcn: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 40%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 224.3 76.3% 58%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-dm-sans), 'DM Sans', system-ui, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background: var(--accent-glow);
+    color: hsl(var(--foreground));
+  }
+
+  /* Refined scrollbars */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.25);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.5);
+    background-clip: content-box;
+  }
+
+  .sidebar-scope ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+    background-clip: content-box;
+  }
+}
+
+/* ------------------------------------------------------------------
+ * Legacy component utility classes — preserved so older pages render
+ * ------------------------------------------------------------------ */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 font-medium rounded-lg px-4 py-2 transition-all duration-150 ease-out;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-hover focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-accent/40;
+  }
+  .btn-ghost {
+    @apply btn border border-line bg-white text-ink-primary hover:bg-surface-alt;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
+  }
+  .input {
+    @apply w-full border border-line rounded-lg px-3 py-2 text-base text-ink-primary bg-white placeholder:text-ink-muted
+           focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all duration-150;
+  }
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-slate-100 p-5;
+  }
+  .badge {
+    @apply inline-flex items-center text-xs font-medium px-2.5 py-0.5 rounded-full;
+  }
+  .skeleton {
+    @apply rounded-md bg-slate-200 animate-skeleton;
+  }
+  .nav-item {
+    @apply flex items-center gap-3 px-4 py-2.5 mx-2 rounded-md text-sm font-medium text-sidebar-text
+           transition-all duration-150 ease-out hover:bg-sidebar-hover hover:text-sidebar-text-active;
+  }
+  .nav-item-active {
+    background: var(--sidebar-active-bg);
+    border-left: 2px solid var(--accent);
+    color: var(--sidebar-text-active);
+    padding-left: calc(1rem - 2px);
+  }
+  .mono { font-family: var(--font-dm-mono), 'DM Mono', ui-monospace, monospace; font-feature-settings: 'tnum'; }
+}
+
+/* ------------------------------------------------------------------
+ * Status badge color tokens — work in light AND dark
+ * ------------------------------------------------------------------ */
+.badge-new            { @apply bg-indigo-500/15 text-indigo-600 border-indigo-500/30 dark:text-indigo-400; }
+.badge-contacted      { @apply bg-blue-500/15 text-blue-600 border-blue-500/30 dark:text-blue-400; }
+.badge-interested     { @apply bg-violet-500/15 text-violet-600 border-violet-500/30 dark:text-violet-400; }
+.badge-not_interested { @apply bg-red-500/15 text-red-600 border-red-500/30 dark:text-red-400; }
+.badge-call_back      { @apply bg-amber-500/15 text-amber-600 border-amber-500/30 dark:text-amber-400; }
+.badge-account_opened { @apply bg-teal-500/15 text-teal-600 border-teal-500/30 dark:text-teal-400; }
+.badge-ftd_done       { @apply bg-emerald-500/15 text-emerald-600 border-emerald-500/30 dark:text-emerald-400; }
+.badge-cold           { @apply bg-slate-500/15 text-slate-600 border-slate-500/30 dark:text-slate-400; }
+.badge-dnd            { @apply bg-red-700/15 text-red-700 border-red-700/30 dark:text-red-500; }
+.badge-inactive       { @apply bg-slate-600/15 text-slate-600 border-slate-600/30 dark:text-slate-500; }
+.badge-reactive       { @apply bg-orange-500/15 text-orange-600 border-orange-500/30 dark:text-orange-400; }
+
+/* ------------------------------------------------------------------
+ * Motion utilities — shimmer skeleton + number ticker
+ * ------------------------------------------------------------------ */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 25%,
+    hsl(var(--muted-foreground) / 0.1) 50%,
+    hsl(var(--muted)) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@keyframes ticker-up {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.ticker { animation: ticker-up 0.6s cubic-bezier(0.16, 1, 0.3, 1); }
+
+.sidebar-transition { transition: width 300ms ease, transform 300ms ease; }
