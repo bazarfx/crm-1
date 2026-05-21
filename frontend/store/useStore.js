@@ -18,6 +18,7 @@ export const useStore = create()(
       permissionsLoaded: false,
 
       setUser: (user) => set({ user }),
+      updateUser: (partial) => set((s) => ({ user: s.user ? { ...s.user, ...partial } : s.user })),
       markHydrated: () => set({ hydrated: true }),
 
       login: async (email, password) => {

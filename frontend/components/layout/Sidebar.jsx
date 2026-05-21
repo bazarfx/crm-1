@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Users, UserCog, Building2, Megaphone,
-  BarChart3, Webhook, Settings, X, TrendingUp, LogOut, FlaskConical, Shield,
+  BarChart3, Webhook, Settings, X, TrendingUp, LogOut, FlaskConical, Shield, Eye,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -28,6 +28,7 @@ const NAV = [
   { href: '/ark-logs',   label: 'ARK Logs',   icon: Webhook,         roles: ADMIN },
   { href: '/trial-leads',label: 'Trial Leads',icon: FlaskConical,    roles: ['super_admin'] },
   { href: '/permissions',label: 'Permissions',icon: Shield,          roles: ['super_admin'] },
+  { href: '/admin-actions',label:'Admin Actions',icon: Eye,           roles: ['super_admin'] },
   { href: '/settings',   label: 'Settings',   icon: Settings,        roles: ADMIN },
 ];
 

@@ -24,7 +24,9 @@ export default function LoginPage() {
   });
 
   useEffect(() => {
-    if (hydrated && user) router.replace('/dashboard');
+    if (hydrated && user) {
+      router.replace(user.must_change_password ? '/change-password' : '/dashboard');
+    }
   }, [hydrated, user, router]);
 
   const onSubmit = async ({ email, password }) => {
@@ -33,7 +35,7 @@ export default function LoginPage() {
     try {
       const u = await login(email.trim(), password);
       toast.success(`Welcome back${u?.first_name ? `, ${u.first_name}` : ''}`);
-      router.push('/dashboard');
+      router.push(u?.must_change_password ? '/change-password' : '/dashboard');
     } catch (err) {
       const msg = err?.response?.data?.message
         || (err?.code === 'ERR_NETWORK'

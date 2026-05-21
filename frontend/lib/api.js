@@ -1,4 +1,5 @@
 import axios from 'axios';
+import toast from 'react-hot-toast';
 import { getAccessToken, getRefreshToken, setTokens, clearTokens } from './auth';
 
 const baseURL =
@@ -32,26 +33,57 @@ const performRefresh = async () => {
   return next?.accessToken;
 };
 
+/**
+ * Hard logout — used when the user's account has been deactivated, deleted,
+ * or their token is irrecoverably invalid. Shows a reason toast (if one is
+ * provided), clears local auth state, and redirects to /login. Avoids the
+ * redirect loop if we're already on /login.
+ */
+const hardLogout = (reason) => {
+  if (typeof window === 'undefined') return;
+  if (reason) toast.error(reason, { duration: 4500 });
+  clearTokens();
+  // Clear Zustand-persisted user blob too so the next page load can't rehydrate
+  try { window.localStorage.removeItem('crm1-store'); } catch {}
+  if (window.location.pathname !== '/login') {
+    setTimeout(() => { window.location.href = '/login'; }, 600);
+  }
+};
+
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
     const original = err.config || {};
     const status = err.response?.status;
+    const code = err.response?.data?.code;
 
+    // ── Account-state codes — no point retrying with a refreshed token ──
+    if (status === 401 && (code === 'USER_DEACTIVATED' || code === 'USER_DELETED')) {
+      hardLogout(
+        code === 'USER_DEACTIVATED'
+          ? 'Your account has been deactivated. Contact your administrator.'
+          : 'Your account has been deleted.'
+      );
+      return Promise.reject(err);
+    }
+
+    // ── Generic 401 → try a refresh ONCE, then hard-logout ──
     if (status === 401 && !original._retry && !original.url?.includes('/auth/')) {
       original._retry = true;
       try {
-        if (!refreshInFlight) refreshInFlight = performRefresh().finally(() => { refreshInFlight = null; });
+        if (!refreshInFlight) {
+          refreshInFlight = performRefresh().finally(() => { refreshInFlight = null; });
+        }
         const newToken = await refreshInFlight;
         if (newToken) {
           original.headers.Authorization = `Bearer ${newToken}`;
           return api.request(original);
         }
       } catch {
-        clearTokens();
-        if (typeof window !== 'undefined') window.location.href = '/login';
+        hardLogout(code === 'TOKEN_EXPIRED' ? 'Session expired. Please log in again.' : null);
       }
     }
+
     return Promise.reject(err);
   }
 );

@@ -8,11 +8,110 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import api, { unwrap } from '@/lib/api';
 import { useAuth } from '@/hooks/useAuth';
+import { useStore } from '@/store/useStore';
 import DataTable from '@/components/shared/DataTable';
 import StatusBadge from '@/components/shared/StatusBadge';
 import FilterDrawer from '@/components/leads/FilterDrawer';
 import LeadForm from '@/components/leads/LeadForm';
 import { inrFormat } from '@/lib/charts';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+
+const FALLBACK_STATUSES = [
+  { value: 'new',            label: 'New' },
+  { value: 'contacted',      label: 'Contacted' },
+  { value: 'interested',     label: 'Interested' },
+  { value: 'not_interested', label: 'Not Interested' },
+  { value: 'call_back',      label: 'Call Back' },
+  { value: 'account_opened', label: 'Account Opened' },
+  { value: 'ftd_done',       label: 'FTD Done' },
+  { value: 'cold',           label: 'Cold' },
+  { value: 'dnd',            label: 'DND' },
+  { value: 'inactive',       label: 'Inactive' },
+  { value: 'reactive',       label: 'Reactive' },
+];
+
+function LeadStatusDropdown({ lead, statuses, onChange }) {
+  const [updating, setUpdating] = useState(false);
+  const current = lead.status || lead.lead_status || 'new';
+
+  const handle = async (next) => {
+    if (next === current) return;
+    setUpdating(true);
+    try {
+      await api.patch(`/leads/${lead.id}`, { lead_status: next });
+      toast.success('Status updated');
+      onChange();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed');
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  return (
+    <Select value={current} onValueChange={handle} disabled={updating}>
+      <SelectTrigger
+        className="h-7 text-[10px] w-36 border-0 bg-transparent p-1 hover:bg-muted/40 [&>svg]:opacity-50"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <StatusBadge status={current} />
+      </SelectTrigger>
+      <SelectContent onClick={(e) => e.stopPropagation()}>
+        {statuses.map((s) => (
+          <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function LeadAssignmentDropdown({ lead, telesellers, onChange }) {
+  const [updating, setUpdating] = useState(false);
+  const current =
+    lead.lead_owner_id || lead.owner_id || lead.owner?.id || '';
+
+  const handle = async (next) => {
+    if (!next || next === current) return;
+    setUpdating(true);
+    try {
+      await api.post(`/leads/${lead.id}/assign`, { user_id: next });
+      toast.success('Lead reassigned');
+      onChange();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed');
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const currentLabel =
+    telesellers.find((t) => t.id === current)
+      ? `${telesellers.find((t) => t.id === current).first_name} ${telesellers.find((t) => t.id === current).last_name}`
+      : (lead.owner_name || lead.owner?.name || '—');
+
+  return (
+    <Select value={current || ''} onValueChange={handle} disabled={updating}>
+      <SelectTrigger
+        className="h-7 text-xs border-0 bg-transparent p-1 hover:bg-muted/40 w-44 [&>svg]:opacity-50"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="truncate">{currentLabel}</span>
+      </SelectTrigger>
+      <SelectContent onClick={(e) => e.stopPropagation()}>
+        {telesellers.map((t) => (
+          <SelectItem key={t.id} value={t.id}>
+            {t.first_name} {t.last_name}
+            {t.native_language && (
+              <span className="text-muted-foreground capitalize ml-1.5">({t.native_language})</span>
+            )}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 dayjs.extend(relativeTime);
 
@@ -34,8 +133,12 @@ const colorTextFromName = (name) => {
 export default function LeadsPage() {
   const router = useRouter();
   const { isReadOnly, can } = useAuth();
+  const hasPermission = useStore((s) => s.hasPermission);
+  const config = useStore((s) => s.config);
   const canCreate = can('super_admin', 'admin', 'floor_manager');
   const isTele = can('tele_sales');
+  const canChangeStatus = hasPermission('leads.change_status') || can('super_admin', 'admin', 'floor_manager');
+  const canReassign = hasPermission('leads.reassign') || can('super_admin', 'admin', 'floor_manager');
 
   const [page, setPage] = useState(1);
   const [limit] = useState(25);
@@ -48,7 +151,17 @@ export default function LeadsPage() {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [campaigns, setCampaigns] = useState([]);
+  const [telesellers, setTelesellers] = useState([]);
   const [err, setErr] = useState(null);
+
+  // Pull the live status list out of config if it's been hydrated, otherwise
+  // fall back to the canonical list so the dropdown always has options.
+  const statuses = useMemo(() => {
+    const fromConfig = Array.isArray(config?.lead_status)
+      ? config.lead_status.map((r) => ({ value: r.key, label: r.label || r.key }))
+      : null;
+    return fromConfig?.length ? fromConfig : FALLBACK_STATUSES;
+  }, [config]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -88,6 +201,22 @@ export default function LeadsPage() {
       } catch { /* silent */ }
     })();
   }, []);
+
+  // Telesellers list — used by the inline reassign dropdown. Only fetched for
+  // users who can actually reassign so we don't waste a request.
+  useEffect(() => {
+    if (!canReassign) return;
+    (async () => {
+      try {
+        const res = await api.get('/users', {
+          params: { role: 'tele_sales', limit: 200 },
+        });
+        const payload = unwrap(res);
+        const list = Array.isArray(payload) ? payload : payload?.data || [];
+        setTelesellers(list.filter((u) => u.role === 'tele_sales' || !u.role));
+      } catch { /* silent */ }
+    })();
+  }, [canReassign]);
 
   const exportCsv = async () => {
     try {
@@ -151,7 +280,9 @@ export default function LeadsPage() {
       { accessorKey: 'language', header: 'Lang',
         cell: ({ getValue }) => <span className="badge bg-slate-100 text-slate-700">{getValue() || '—'}</span> },
       { accessorKey: 'status', header: 'Status',
-        cell: ({ row }) => <StatusBadge status={row.original.status || row.original.lead_status} color={row.original.status_color} /> },
+        cell: ({ row }) => canChangeStatus
+          ? <LeadStatusDropdown lead={row.original} statuses={statuses} onChange={fetchData} />
+          : <StatusBadge status={row.original.status || row.original.lead_status} color={row.original.status_color} /> },
       { accessorKey: 'source', header: 'Source',
         cell: ({ getValue }) => <span className="text-xs text-ink-secondary">{getValue() || '—'}</span> },
       { accessorKey: 'campaign',
@@ -168,6 +299,9 @@ export default function LeadsPage() {
         accessorKey: 'owner',
         header: 'Owner',
         cell: ({ row }) => {
+          if (canReassign && telesellers.length > 0) {
+            return <LeadAssignmentDropdown lead={row.original} telesellers={telesellers} onChange={fetchData} />;
+          }
           const o = row.original.owner_name || row.original.owner?.name || row.original.lead_owner?.name;
           return <span className="text-xs text-ink-secondary">{o || '—'}</span>;
         },
@@ -207,7 +341,7 @@ export default function LeadsPage() {
     );
 
     return base;
-  }, [isTele]);
+  }, [isTele, canChangeStatus, canReassign, statuses, telesellers, fetchData]);
 
   return (
     <div className="space-y-4">
