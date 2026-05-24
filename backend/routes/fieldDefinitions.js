@@ -1,0 +1,22 @@
+const router = require('express').Router();
+const { verifyToken } = require('../middleware/auth');
+const ctrl = require('../controllers/fieldDefinitionController');
+
+router.use(verifyToken);
+
+router.get('/', ctrl.list);
+router.get('/:id', ctrl.getOne);
+router.get('/:id/usage-count', ctrl.usageCount);
+
+router.post('/', ctrl.create);
+router.patch('/:id', ctrl.update);
+router.post('/:id/archive', ctrl.archive);
+router.post('/:id/restore', ctrl.restore);
+router.get('/:id/backfill-preview', ctrl.backfillPreview);
+router.post('/:id/backfill-default', ctrl.backfillDefault);
+router.get('/:id/option-usage', ctrl.getOptionUsage);
+router.post('/:id/migrate-options', ctrl.migrateOptions);
+router.post('/reorder', ctrl.reorder);
+router.post('/test-render', ctrl.testRender);
+
+module.exports = router;

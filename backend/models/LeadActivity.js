@@ -33,6 +33,12 @@ LeadActivity.init(
     scheduled_at: { type: DataTypes.DATE, allowNull: true },
     completed_at: { type: DataTypes.DATE, allowNull: true },
     metadata: { type: DataTypes.JSONB, allowNull: true },
+    custom_fields: {
+      type: DataTypes.JSONB,
+      defaultValue: {},
+      allowNull: false,
+      comment: 'Dynamic custom fields, structure defined by FieldDefinition registry',
+    },
   },
   {
     sequelize,

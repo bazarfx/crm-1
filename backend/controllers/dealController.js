@@ -7,6 +7,7 @@ const {
   Campaign,
 } = require('../models');
 const { success, error } = require('../utils/responseHelper');
+const { applyCustomFieldFilters } = require('../utils/customFieldIntegration');
 
 // A "deal" is just a Lead with ftd_at set — same table, different lens.
 const ASSIGN_COL = 'assigned_to_id';
@@ -91,7 +92,12 @@ async function list(req, res) {
     const sortBy = allowedSorts.includes(req.query.sort_by) ? req.query.sort_by : 'ftd_at';
     const sortDir = (req.query.sort_dir || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
-    const where = buildWhere(req);
+    // Deals share the leads table — same JSONB blob, same cf_ filter
+    // semantics as the leads list. Append cf_ predicates after the deal-
+    // specific scope so they compose cleanly with assignee/source/etc.
+    // Qualify with "Lead" because INCLUDE_DEAL joins users/groups/campaigns
+    // (users now also has a custom_fields column).
+    const where = applyCustomFieldFilters(buildWhere(req), req.query, 'Lead');
 
     const result = await Lead.findAndCountAll({
       where,

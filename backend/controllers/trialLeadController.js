@@ -8,6 +8,12 @@ const {
 } = require('../models');
 const { autoAssignLead } = require('../utils/leadAutoAssign');
 const { success, error } = require('../utils/responseHelper');
+const {
+  processIncomingCustomFields,
+  isSkipValidationAllowed,
+  recordBypassAudit,
+} = require('../utils/customFieldIntegration');
+const { AuditLog } = require('../models');
 
 const TRIAL_PASSWORD = null;
 
@@ -65,6 +71,14 @@ async function create(req, res) {
 
   const leadData = makeFakeLeadPayload({ language, lead_status, trial_label, trial_scenario });
 
+  // Trial leads share the `lead` entity_type for custom_fields — same
+  // registry, same validation. Reject fast if the schema patch is bad.
+  const allowSkip = isSkipValidationAllowed(req);
+  const { custom_fields, errors: cfErrors, bypassed } =
+    await processIncomingCustomFields('lead', req.body || {}, null, { skip_validation: allowSkip });
+  if (cfErrors.length) return error(res, cfErrors.join('; '), 400);
+  leadData.custom_fields = custom_fields;
+
   let assignment = null;
   try {
     assignment = await autoAssignLead({
@@ -93,6 +107,12 @@ async function create(req, res) {
     title: '[TRIAL] Lead auto-assigned',
     description: `Trial lead routed via round robin (${assignment.reason}). Scenario: ${trial_scenario || 'general_demo'}.`,
   });
+
+  if (bypassed) {
+    await recordBypassAudit({
+      AuditLog, req, resource: 'Lead', resourceId: lead.id, incoming: leadData.custom_fields,
+    });
+  }
 
   return success(res, lead, 'Trial lead created and assigned', 201);
 }

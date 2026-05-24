@@ -24,6 +24,12 @@ Group.init(
       allowNull: true,
       references: { model: 'users', key: 'id' },
     },
+    custom_fields: {
+      type: DataTypes.JSONB,
+      defaultValue: {},
+      allowNull: false,
+      comment: 'Dynamic custom fields, structure defined by FieldDefinition registry',
+    },
   },
   {
     sequelize,

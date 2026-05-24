@@ -163,17 +163,45 @@ async function run() {
     { campaign_id: c2.id, group_id: groups.english.id, is_active: true },
   ]);
 
-  console.log('Seeding 8 campaign leads via round robin...');
-  const statuses = ['new', 'contacted', 'interested', 'call_back', 'account_opened', 'ftd_done', 'cold', 'not_interested'];
-  const langs    = ['tamil', 'tamil', 'english', 'hindi', 'telugu', 'tamil', 'english', 'hindi'];
+  // ───── Verify-then-seed campaign leads ─────
+  // Skip any language with no active teleseller so we never produce
+  // unassigned rows in fresh seed data. Each surviving slot routes through
+  // the same round robin used in production.
+  console.log('Verifying every seed lead can be assigned before creating...');
+  const SEED_LEAD_PLAN = [
+    { lang: 'tamil',   status: 'new' },
+    { lang: 'tamil',   status: 'contacted' },
+    { lang: 'english', status: 'interested' },
+    { lang: 'hindi',   status: 'call_back' },
+    { lang: 'telugu',  status: 'account_opened' },
+    { lang: 'tamil',   status: 'ftd_done' },
+    { lang: 'english', status: 'cold' },
+    { lang: 'hindi',   status: 'not_interested' },
+  ];
+  const verified = [];
+  for (const { lang, status } of SEED_LEAD_PLAN) {
+    const { assignee } = await assignToTeleseller(lang);
+    if (!assignee) {
+      console.log(`  ⚠️  Skipping ${lang} (${status}) — no teleseller speaks ${lang}`);
+      continue;
+    }
+    verified.push({ lang, status });
+  }
+  console.log(`Verified ${verified.length}/${SEED_LEAD_PLAN.length} leads can be assigned. Resetting RR pointers...`);
 
-  for (let i = 0; i < 8; i++) {
-    const lang = langs[i];
-    const status = statuses[i];
+  // Drain any state the verification pass left behind so the actual seeds
+  // start from index 0 — keeps the per-lead print output predictable.
+  await RoundRobinState.destroy({ where: {}, force: true });
+  await RRPointer.destroy({ where: {}, force: true });
+
+  const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
+  console.log('Seeding leads with guaranteed assignment...');
+  for (let i = 0; i < verified.length; i++) {
+    const { lang, status } = verified[i];
     const groupKey = lang in groups ? lang : 'english';
     const campaign = lang === 'tamil' ? c1 : c2;
-
     const { assignee, candidates } = await assignToTeleseller(lang, groups[groupKey].id);
+    if (!assignee) throw new Error(`Assignment failed for ${lang} at slot ${i}`);
 
     await Lead.create({
       first_name: faker.person.firstName(),
@@ -183,12 +211,12 @@ async function run() {
       email: faker.internet.email().toLowerCase(),
       language: lang,
       preferred_language: lang,
-      lead_status: assignee ? status : 'unassigned',
+      lead_status: status,
       lead_source: 'facebook_ads',
       department: 'tele_sales',
       trading_experience: 'beginner',
       preferred_market: 'NSE Options',
-      assigned_to_id: assignee?.id || null,
+      assigned_to_id: assignee.id,
       group_id: groups[groupKey].id,
       campaign_id: campaign.id,
       campaign_name: campaign.name,
@@ -200,20 +228,36 @@ async function run() {
         : null,
       facebook_lead_id: `lean_${Date.now()}_${i}`,
       total_attempted_call_count: status === 'new' ? 0 : faker.number.int({ min: 1, max: 5 }),
+      custom_fields: { follow_up_priority: PRIORITIES[i % PRIORITIES.length] },
     });
 
     console.log(
-      `  Lead ${i + 1}: ${lang} → ${assignee
-        ? `${assignee.first_name} ${assignee.last_name}`
-        : 'UNASSIGNED'} (${candidates} candidates)`,
+      `  Lead ${i + 1}: ${lang} (${status}) → ${assignee.first_name} ${assignee.last_name} (${candidates} candidates)`,
     );
   }
 
-  console.log('Seeding 2 direct ARK leads via senior round robin...');
-  const arkLangs = ['tamil', 'english'];
-  for (let i = 0; i < 2; i++) {
-    const lang = arkLangs[i];
+  // ───── Verify-then-seed direct-ARK leads (senior round robin) ─────
+  console.log('Verifying direct ARK senior assignments...');
+  const SEED_ARK_PLAN = [
+    { lang: 'tamil',   status: 'account_opened', ftd: false },
+    { lang: 'english', status: 'ftd_done',       ftd: true  },
+  ];
+  const verifiedArk = [];
+  for (const slot of SEED_ARK_PLAN) {
+    const { assignee } = await assignToSenior(slot.lang);
+    if (!assignee) {
+      console.log(`  ⚠️  Skipping direct ARK ${slot.lang} — no senior speaks ${slot.lang}`);
+      continue;
+    }
+    verifiedArk.push(slot);
+  }
+  console.log(`Verified ${verifiedArk.length}/${SEED_ARK_PLAN.length} direct ARK leads can be assigned.`);
+
+  console.log('Seeding direct ARK leads...');
+  for (let i = 0; i < verifiedArk.length; i++) {
+    const { lang, status, ftd } = verifiedArk[i];
     const { assignee: senior, candidates } = await assignToSenior(lang);
+    if (!senior) throw new Error(`Senior assignment failed for ${lang} at slot ${i}`);
 
     await Lead.create({
       first_name: faker.person.firstName(),
@@ -222,10 +266,10 @@ async function run() {
       email: faker.internet.email().toLowerCase(),
       language: lang,
       preferred_language: lang,
-      lead_status: senior ? (i === 1 ? 'ftd_done' : 'account_opened') : 'unassigned',
+      lead_status: status,
       lead_source: 'direct_ark',
       department: 'tele_sales',
-      assigned_to_id: senior?.id || null,
+      assigned_to_id: senior.id,
       group_id: null,
       campaign_id: null,
       campaign_name: 'Direct ARK Signup',
@@ -233,20 +277,22 @@ async function run() {
       ark_username: `91${faker.string.numeric(10)}`,
       ark_uid: faker.string.alphanumeric(12).toUpperCase(),
       account_opened_at: new Date(),
-      ftd_at: i === 1 ? new Date() : null,
-      deposited_amount: i === 1 ? faker.number.int({ min: 10000, max: 200000 }) : null,
+      ftd_at: ftd ? new Date() : null,
+      deposited_amount: ftd ? faker.number.int({ min: 10000, max: 200000 }) : null,
       total_attempted_call_count: 0,
     });
 
     console.log(
-      `  Direct ARK ${i + 1}: ${lang} → senior ${senior
-        ? `${senior.first_name} ${senior.last_name}`
-        : 'UNASSIGNED'} (${candidates} candidates)`,
+      `  Direct ARK ${i + 1}: ${lang} (${status}) → senior ${senior.first_name} ${senior.last_name} (${candidates} candidates)`,
     );
   }
 
   console.log('Seeding role permissions...');
   await seedRolePermissions({ force: true });
+
+  console.log('Seeding demo custom field definitions...');
+  const { seedDemoFields } = require('./seedDemoFields');
+  await seedDemoFields();
 
   console.log('');
   console.log('✅ LEAN SEED COMPLETE');

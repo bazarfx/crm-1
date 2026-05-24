@@ -32,6 +32,11 @@ router.post(
   ctl.bulkAssign,
 );
 router.get(
+  '/:id/with-fields',
+  allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales', 'back_office', 'auditor', 'archive'),
+  ctl.getWithFieldDefs,
+);
+router.get(
   '/:id',
   allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales', 'back_office', 'auditor', 'archive'),
   ctl.getOne,

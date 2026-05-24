@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { LANGUAGES } from '@/lib/languages';
 import { useStore } from '@/store/useStore';
 import api, { unwrap } from '@/lib/api';
+import { DynamicFields, ManageFieldsButton } from '@/components/dynamic/EditableForm';
 
 // Each "profile" is one bucket the creator picks in step 1. The `role` field is
 // what we actually persist on the User. Admins can't create admins.
@@ -90,6 +91,7 @@ const EMPTY = {
   password: 'Test@1234',
   languages: [],
   permissions: {}, // permission_key → level, only for custom
+  custom_fields: {},
 };
 
 export default function CreateUserDialog({ open, onOpenChange, onCreated }) {
@@ -157,6 +159,9 @@ export default function CreateUserDialog({ open, onOpenChange, onCreated }) {
     if (profile.role === 'custom') {
       payload.permissions = form.permissions;
     }
+    if (form.custom_fields && Object.keys(form.custom_fields).length > 0) {
+      payload.custom_fields = form.custom_fields;
+    }
 
     setSaving(true);
     try {
@@ -178,24 +183,31 @@ export default function CreateUserDialog({ open, onOpenChange, onCreated }) {
     <Dialog open={open} onOpenChange={(v) => (v ? onOpenChange(true) : close())}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <DialogTitle className="flex items-center gap-2">
+                {step === 2 && (
+                  <button
+                    type="button"
+                    onClick={() => setStep(1)}
+                    className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-muted text-muted-foreground"
+                    aria-label="Back to profile picker"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </button>
+                )}
+                {step === 1 ? 'New user — pick a profile' : `New ${profile?.title || ''}`}
+              </DialogTitle>
+              <DialogDescription>
+                {step === 1
+                  ? 'Different profiles need different details. Pick the one that fits.'
+                  : profile?.blurb}
+              </DialogDescription>
+            </div>
             {step === 2 && (
-              <button
-                type="button"
-                onClick={() => setStep(1)}
-                className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-muted text-muted-foreground"
-                aria-label="Back to profile picker"
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </button>
+              <ManageFieldsButton entityType="user" label="Fields" size="sm" />
             )}
-            {step === 1 ? 'New user — pick a profile' : `New ${profile?.title || ''}`}
-          </DialogTitle>
-          <DialogDescription>
-            {step === 1
-              ? 'Different profiles need different details. Pick the one that fits.'
-              : profile?.blurb}
-          </DialogDescription>
+          </div>
         </DialogHeader>
 
         {step === 1 ? (
@@ -279,6 +291,15 @@ function ProfileForm({ profile, form, setForm, saving }) {
       {profile.role === 'custom' && (
         <PermissionsBlock form={form} setForm={setForm} />
       )}
+
+      {/* Custom user fields — render inline next to the native ones. The
+          "Manage fields" button up top is the single entry point for admins
+          who want to add/edit the schema. */}
+      <DynamicFields
+        entityType="user"
+        values={form.custom_fields || {}}
+        onChange={(cf) => setForm((p) => ({ ...p, custom_fields: cf }))}
+      />
 
       <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg p-3 text-xs flex gap-2">
         <AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />

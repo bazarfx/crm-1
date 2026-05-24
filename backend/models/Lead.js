@@ -124,6 +124,16 @@ Lead.init(
     source_raw: { type: DataTypes.JSONB, allowNull: true },
     ark_raw: { type: DataTypes.JSONB, allowNull: true },
 
+    // ───── DYNAMIC CUSTOM FIELDS ─────
+    // Schema is defined in field_definitions; values are validated + coerced
+    // by utils/customFieldValidator on every write path.
+    custom_fields: {
+      type: DataTypes.JSONB,
+      defaultValue: {},
+      allowNull: false,
+      comment: 'Dynamic custom fields, structure defined by FieldDefinition registry',
+    },
+
     // ───── FOREIGN KEYS ─────
     // Lead is ASSIGNED to a user (teleseller or senior). Leads are company
     // property — they are not "owned" by the user they're assigned to.

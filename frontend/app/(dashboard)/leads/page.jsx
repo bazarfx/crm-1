@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, Download, Filter, Phone, Mail, Copy, CheckCircle2, X, AlertTriangle } from 'lucide-react';
+import { Plus, Download, Filter, Phone, Mail, Copy, CheckCircle2, X, AlertTriangle, Columns3 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -17,10 +17,15 @@ import { Button } from '@/components/ui/button';
 import { inrFormat } from '@/lib/charts';
 import { cn } from '@/lib/utils';
 import { LanguageBadge, LanguageList } from '@/components/shared/LanguageBadge';
+import { AssigneeDropdown } from '@/components/shared/AssigneeDropdown';
 import { labelFor } from '@/lib/languages';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { DynamicFilterBar } from '@/components/dynamic/DynamicFilterBar';
+import { DynamicCell } from '@/components/dynamic/DynamicCell';
+import { fetchFieldDefinitions, visibleFields } from '@/lib/dynamic';
 
 // Status slug → status dot color for the inactive chip state. Mirrors the
 // status palette in CLAUDE.md so chips look right even before the user picks
@@ -88,92 +93,34 @@ function LeadStatusDropdown({ lead, statuses, onChange }) {
   );
 }
 
-function LeadAssignmentDropdown({ lead, telesellers, onChange, showOverflow }) {
-  const [updating, setUpdating] = useState(false);
+function LeadAssignmentDropdown({ lead, onChange }) {
   const current = lead.assigned_to_id || lead.assignedTo?.id || '';
 
   const handle = async (next) => {
     if (!next || next === current) return;
-    setUpdating(true);
     try {
       await api.patch(`/leads/${lead.id}/assign`, { new_assignee_id: next });
       toast.success('Lead reassigned');
       onChange();
     } catch (e) {
       toast.error(e?.response?.data?.message || 'Failed');
-    } finally {
-      setUpdating(false);
     }
   };
 
-  const matched = telesellers.find((t) => t.id === current);
-  const assignee = matched || lead.assignedTo || null;
-  const assigneeName = assignee
-    ? `${assignee.first_name || ''} ${assignee.last_name || ''}`.trim() || '—'
-    : '—';
-  const assigneeLangs = Array.isArray(assignee?.languages) ? assignee.languages : [];
-  const assigneeMainLang = assigneeLangs[0] || null;
-
-  // "Language mismatch" indicator — visible to admins. The lead has a language,
-  // the assignee speaks at least one, but none of them match. Admin override
-  // (e.g. cross-team handoff during staffing gap) — flag so it's visible.
-  const isMismatch = Boolean(
-    showOverflow
-    && assignee
-    && lead.language
-    && assigneeLangs.length > 0
-    && !assigneeLangs.includes(lead.language)
-  );
+  // Direct-ARK leads route to seniors; everything else to telesellers. The
+  // dropdown pulls its own user list keyed off the role prop, so we don't
+  // need to thread the assignees through this prop chain anymore.
+  const role = lead.lead_source === 'direct_ark' ? 'senior' : 'tele_sales';
 
   return (
-    <Select value={current || ''} onValueChange={handle} disabled={updating}>
-      <SelectTrigger
-        className="h-7 text-xs border-0 bg-transparent p-1 hover:bg-muted/40 w-52 [&>svg]:opacity-50"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <span className="inline-flex items-center gap-1.5 truncate min-w-0">
-          <span className="truncate">{assigneeName}</span>
-          {assigneeMainLang && <LanguageBadge language={assigneeMainLang} size="xs" />}
-          {assigneeLangs.length > 1 && (
-            <span className="text-[9px] text-muted-foreground">+{assigneeLangs.length - 1}</span>
-          )}
-          {isMismatch && (
-            <span
-              className="text-[9px] text-red-500 dark:text-red-400"
-              title={`Lead is ${lead.language} but assignee doesn't speak it`}
-            >
-              !
-            </span>
-          )}
-        </span>
-      </SelectTrigger>
-      <SelectContent onClick={(e) => e.stopPropagation()}>
-        {telesellers.length === 0 ? (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">No assignees loaded</div>
-        ) : (
-          telesellers.map((t) => (
-            <SelectItem key={t.id} value={t.id}>
-              <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                <span className="truncate">{t.first_name} {t.last_name}</span>
-                {t.role === 'senior' && (
-                  <span className="text-muted-foreground text-[10px]">(SR)</span>
-                )}
-                {Array.isArray(t.languages) && t.languages.length > 0 && (
-                  <span className="inline-flex items-center gap-1">
-                    {t.languages.slice(0, 3).map((l) => (
-                      <LanguageBadge key={l} language={l} size="xs" />
-                    ))}
-                    {t.languages.length > 3 && (
-                      <span className="text-[9px] text-muted-foreground">+{t.languages.length - 3}</span>
-                    )}
-                  </span>
-                )}
-              </div>
-            </SelectItem>
-          ))
-        )}
-      </SelectContent>
-    </Select>
+    <AssigneeDropdown
+      value={current}
+      onChange={handle}
+      leadLanguage={lead.language}
+      role={role}
+      size="sm"
+      placeholder="Unassigned"
+    />
   );
 }
 
@@ -213,6 +160,12 @@ export default function LeadsPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
 
+  // Custom field definitions for this entity, plus the per-user pick of which
+  // ones should render as table columns. Defaults to the schema admin's
+  // `is_visible_in_list` flag the first time the user lands on this page.
+  const [customDefs, setCustomDefs] = useState([]);
+  const [visibleColumns, setVisibleColumns] = useState({});
+
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
@@ -231,6 +184,9 @@ export default function LeadsPage() {
   const [activeTab, setActiveTab] = useState('all');
   const [unassignedSummary, setUnassignedSummary] = useState({ total: 0 });
   const [selected, setSelected] = useState(() => new Set());
+  // Specific-assignee bulk action: admin picks a user, then "Assign N" sends
+  // the whole selection to that user (skipping the round-robin).
+  const [bulkAssigneeId, setBulkAssigneeId] = useState(null);
 
   const refreshUnassignedSummary = useCallback(() => {
     if (!showUnassignedTab) return;
@@ -284,6 +240,14 @@ export default function LeadsPage() {
         has_ark: filters.has_ark || undefined,
         has_ftd: filters.has_ftd || undefined,
       };
+      // Forward every cf_* filter key verbatim — the backend reads
+      // `cf_<field_key>` query params and matches them against the JSONB
+      // custom_fields column.
+      for (const k of Object.keys(filters)) {
+        if (k.startsWith('cf_') && filters[k] !== '' && filters[k] != null) {
+          params[k] = filters[k];
+        }
+      }
       const res = await api.get('/leads', { params });
       const payload = unwrap(res);
       const list = Array.isArray(payload) ? payload : (payload?.items || payload?.data || []);
@@ -299,6 +263,22 @@ export default function LeadsPage() {
   }, [page, limit, search, filters]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Pull the custom field definitions once and seed the column-visibility
+  // map from the admin's `is_visible_in_list` flag. Re-runs when role
+  // changes so role-restricted fields drop off cleanly.
+  useEffect(() => {
+    if (!role) return;
+    fetchFieldDefinitions({ entity_type: 'lead' })
+      .then((defs) => {
+        const vis = visibleFields(defs, role);
+        setCustomDefs(vis);
+        const seeded = {};
+        for (const d of defs) if (d.is_visible_in_list) seeded[d.field_key] = true;
+        setVisibleColumns(seeded);
+      })
+      .catch(() => { /* silent — page works without custom fields */ });
+  }, [role]);
 
   // Fetch the pipeline summary so the status chip strip can show live counts.
   // Non-blocking and silently degrades if /reports is not accessible (e.g. for
@@ -378,6 +358,28 @@ export default function LeadsPage() {
         }
         return next;
       });
+    }
+  };
+
+  const handleBulkSpecificAssign = async () => {
+    if (!bulkAssigneeId || selected.size === 0) return;
+    try {
+      const res = await api.post('/leads/bulk-assign', {
+        lead_ids: Array.from(selected),
+        new_assignee_id: bulkAssigneeId,
+      });
+      const results = unwrap(res)?.results || [];
+      const ok = results.filter((r) => r.status === 'ok').length;
+      const mismatchCount = results.filter((r) => r.status === 'ok' && r.language_match === false).length;
+      toast.success(
+        `${ok} leads assigned${mismatchCount > 0 ? ` (${mismatchCount} cross-language)` : ''}`,
+      );
+      setSelected(new Set());
+      setBulkAssigneeId(null);
+      fetchData();
+      refreshUnassignedSummary();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Bulk assign failed');
     }
   };
 
@@ -575,9 +577,7 @@ export default function LeadsPage() {
             return (
               <LeadAssignmentDropdown
                 lead={row.original}
-                telesellers={telesellers}
                 onChange={fetchData}
-                showOverflow={isAdminRole}
               />
             );
           }
@@ -632,10 +632,28 @@ export default function LeadsPage() {
       }
     );
 
+    // Append a column for every custom field the user has toggled on.
+    // Values come out of the lead's JSONB `custom_fields` blob.
+    for (const def of customDefs) {
+      if (!visibleColumns[def.field_key]) continue;
+      base.push({
+        id: `cf_${def.field_key}`,
+        header: def.label,
+        cell: ({ row }) => (
+          <DynamicCell
+            definition={def}
+            value={row.original.custom_fields?.[def.field_key]}
+          />
+        ),
+        enableSorting: false,
+      });
+    }
+
     return base;
   }, [
     isTele, canChangeStatus, canReassign, statuses, telesellers, fetchData,
     showUnassignedTab, activeTab, rows, selected,
+    customDefs, visibleColumns,
   ]);
 
   // Action-bar level layout: topbar already shows the page title + subtitle,
@@ -731,6 +749,36 @@ export default function LeadsPage() {
               <span className="ml-1 w-1.5 h-1.5 rounded-full bg-primary" />
             )}
           </Button>
+          <DynamicFilterBar entityType="lead" filters={filters} onChange={(next) => { setFilters(next); setPage(1); }} />
+          {customDefs.length > 0 && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="sm" className="h-9 gap-1.5">
+                  <Columns3 size={14} /> Columns
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-64 max-h-[60vh] overflow-y-auto">
+                <p className="text-xs font-medium mb-2">Custom field columns</p>
+                <div className="space-y-1.5">
+                  {customDefs.map((def) => (
+                    <label key={def.field_key} className="flex items-center gap-2 text-xs cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!visibleColumns[def.field_key]}
+                        onChange={(e) =>
+                          setVisibleColumns((prev) => ({
+                            ...prev,
+                            [def.field_key]: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span>{def.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
           <Button variant="outline" size="sm" onClick={exportCsv}>
             <Download size={14} /> Export CSV
           </Button>
@@ -835,14 +883,32 @@ export default function LeadsPage() {
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               {selected.size > 0 ? (
                 <>
                   <span className="text-xs text-muted-foreground">{selected.size} selected</span>
+                  <AssigneeDropdown
+                    value={bulkAssigneeId}
+                    onChange={setBulkAssigneeId}
+                    role="tele_sales"
+                    placeholder="Pick assignee…"
+                    size="sm"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleBulkSpecificAssign}
+                    disabled={!bulkAssigneeId}
+                  >
+                    Assign {selected.size}
+                  </Button>
                   <Button size="sm" variant="outline" onClick={handleBulkRoundRobin}>
                     Run round robin
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => { setSelected(new Set()); setBulkAssigneeId(null); }}
+                  >
                     Clear
                   </Button>
                 </>

@@ -1,367 +1,372 @@
 'use client';
-
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useEffect, useState } from 'react';
+import { Plus, X, Search, Crown, Pencil } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import {
-  Users2, GripVertical, Languages, Building2, Loader2, AlertCircle, Search,
-} from 'lucide-react';
-import toast from 'react-hot-toast';
-import api, { unwrap } from '@/lib/api';
-import { useAuth } from '@/hooks/useAuth';
-import RoleGuard from '@/components/layout/RoleGuard';
-import EmptyState from '@/components/shared/EmptyState';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+  Card, CardContent, CardHeader, CardTitle,
+} from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
-
-const ROLE_PILL = {
-  tele_sales: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
-  senior:     'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20',
-};
-
-function memberLabel(u) {
-  if (!u) return '';
-  return `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.email || 'Member';
-}
-
-function memberInitials(u) {
-  const name = memberLabel(u);
-  const parts = name.split(/\s+/);
-  return ((parts[0]?.[0] || '?') + (parts[1]?.[0] || '')).toUpperCase();
-}
-
-function MemberChip({ member, groupId, canDrag, isDragging, onDragStart, onDragEnd }) {
-  return (
-    <div
-      draggable={canDrag}
-      onDragStart={(e) => canDrag && onDragStart(e, member, groupId)}
-      onDragEnd={onDragEnd}
-      className={cn(
-        'group flex items-center gap-2 px-2 py-1.5 rounded-md border bg-background/60',
-        'transition-all duration-150',
-        canDrag && 'cursor-grab active:cursor-grabbing hover:border-border hover:bg-background',
-        isDragging && 'opacity-40 ring-1 ring-blue-400',
-      )}
-    >
-      {canDrag && (
-        <GripVertical
-          size={12}
-          className="text-muted-foreground/50 group-hover:text-muted-foreground flex-shrink-0"
-        />
-      )}
-      <div className="w-6 h-6 rounded-full bg-muted text-foreground flex items-center justify-center text-[10px] font-semibold flex-shrink-0">
-        {memberInitials(member)}
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-medium truncate">{memberLabel(member)}</p>
-        {member.email && (
-          <p className="font-mono text-[9px] text-muted-foreground truncate">{member.email}</p>
-        )}
-      </div>
-      {member.role && (
-        <span
-          className={cn(
-            'text-[9px] font-medium px-1.5 py-0.5 rounded border whitespace-nowrap',
-            ROLE_PILL[member.role] || 'bg-slate-500/10 text-slate-600 border-slate-500/20',
-          )}
-        >
-          {member.role === 'tele_sales' ? 'tele' : member.role}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function GroupCard({
-  group, canDrag, draggingMemberId, dropTargetId, onDragStart, onDragEnd,
-  onDragOver, onDragLeave, onDrop, isMoving,
-}) {
-  const members = group.members || [];
-  const isDropTarget = dropTargetId === group.id;
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.22 }}
-    >
-      <Card
-        onDragOver={(e) => onDragOver(e, group.id)}
-        onDragLeave={(e) => onDragLeave(e, group.id)}
-        onDrop={(e) => onDrop(e, group.id)}
-        className={cn(
-          'transition-all duration-150 relative',
-          isDropTarget && 'ring-2 ring-blue-400 border-blue-400/50 bg-blue-500/[0.03]',
-        )}
-      >
-        <CardHeader className="pb-2">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <CardTitle className="text-sm truncate">{group.name}</CardTitle>
-              <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                {group.type && (
-                  <Badge variant="secondary" className="text-[9px] capitalize">
-                    <Building2 className="h-2.5 w-2.5 mr-1" />
-                    {group.type}
-                  </Badge>
-                )}
-                {group.language && (
-                  <Badge variant="secondary" className="text-[9px] capitalize">
-                    <Languages className="h-2.5 w-2.5 mr-1" />
-                    {group.language}
-                  </Badge>
-                )}
-                {!group.is_active && (
-                  <Badge variant="destructive" className="text-[9px]">
-                    Inactive
-                  </Badge>
-                )}
-              </div>
-            </div>
-            <div className="text-right flex-shrink-0">
-              <p className="text-lg font-bold tabular-nums leading-none">{members.length}</p>
-              <p className="text-[9px] text-muted-foreground mt-0.5 uppercase tracking-wide">
-                {members.length === 1 ? 'member' : 'members'}
-              </p>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-1.5 pt-0">
-          {isMoving && (
-            <div className="absolute inset-0 bg-background/60 backdrop-blur-[1px] rounded-xl flex items-center justify-center z-10">
-              <Loader2 size={16} className="animate-spin text-muted-foreground" />
-            </div>
-          )}
-          {members.length === 0 ? (
-            <div
-              className={cn(
-                'text-center py-6 text-[11px] text-muted-foreground border border-dashed rounded-md',
-                canDrag && 'border-border/60',
-                isDropTarget && 'border-blue-400/50',
-              )}
-            >
-              {canDrag ? 'Drop a member here' : 'No members'}
-            </div>
-          ) : (
-            <AnimatePresence initial={false}>
-              {members.map((m) => (
-                <motion.div
-                  key={m.id}
-                  layout
-                  initial={{ opacity: 0, x: -4 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 4 }}
-                  transition={{ duration: 0.15 }}
-                >
-                  <MemberChip
-                    member={m}
-                    groupId={group.id}
-                    canDrag={canDrag}
-                    isDragging={draggingMemberId === `${group.id}:${m.id}`}
-                    onDragStart={onDragStart}
-                    onDragEnd={onDragEnd}
-                  />
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          )}
-        </CardContent>
-      </Card>
-    </motion.div>
-  );
-}
-
-function GroupsBoard() {
-  const { role } = useAuth();
-  const canDrag = role === 'super_admin' || role === 'admin';
-
-  const [groups, setGroups] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
-  const [search, setSearch] = useState('');
-
-  // Drag state — keep both the source group AND the user so we can call the
-  // move endpoint with the right (from, to, user) tuple on drop.
-  const [drag, setDrag] = useState(null); // { user, fromGroupId }
-  const [dropTargetId, setDropTargetId] = useState(null);
-  const [movingGroupId, setMovingGroupId] = useState(null);
-
-  const fetchGroups = useCallback(async () => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const res = await api.get('/groups', { params: { limit: 100 } });
-      const payload = unwrap(res);
-      const list = Array.isArray(payload) ? payload : (payload?.data || payload?.items || []);
-      setGroups(list);
-    } catch (e) {
-      setErr(e?.code === 'ERR_NETWORK' ? 'Backend not reachable on :5000' : 'Could not load groups');
-      setGroups([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchGroups(); }, [fetchGroups]);
-
-  const onDragStart = useCallback((e, member, fromGroupId) => {
-    setDrag({ user: member, fromGroupId });
-    // dataTransfer is required for Firefox to fire dragstart; the payload
-    // itself is unused — we read from React state on drop.
-    try {
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', member.id);
-    } catch { /* ignore */ }
-  }, []);
-
-  const onDragEnd = useCallback(() => {
-    setDrag(null);
-    setDropTargetId(null);
-  }, []);
-
-  const onDragOver = useCallback((e, groupId) => {
-    if (!drag || drag.fromGroupId === groupId) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (dropTargetId !== groupId) setDropTargetId(groupId);
-  }, [drag, dropTargetId]);
-
-  const onDragLeave = useCallback((e, groupId) => {
-    // Ignore leaves into descendants — only clear when actually leaving the card.
-    if (e.currentTarget.contains(e.relatedTarget)) return;
-    if (dropTargetId === groupId) setDropTargetId(null);
-  }, [dropTargetId]);
-
-  const moveMember = useCallback(async (user, fromGroupId, toGroupId) => {
-    // Optimistic update — pop from source, push into destination. Revert on failure.
-    const snapshot = groups;
-    setGroups((cur) =>
-      cur.map((g) => {
-        if (g.id === fromGroupId) {
-          return { ...g, members: (g.members || []).filter((m) => m.id !== user.id) };
-        }
-        if (g.id === toGroupId) {
-          const already = (g.members || []).some((m) => m.id === user.id);
-          return already ? g : { ...g, members: [...(g.members || []), user] };
-        }
-        return g;
-      }),
-    );
-    setMovingGroupId(toGroupId);
-    try {
-      await api.post('/groups/move-member', {
-        user_id: user.id,
-        from_group_id: fromGroupId,
-        to_group_id: toGroupId,
-      });
-      toast.success(`Moved ${memberLabel(user)}`);
-    } catch (e) {
-      setGroups(snapshot);
-      toast.error(e?.response?.data?.message || 'Move failed');
-    } finally {
-      setMovingGroupId(null);
-    }
-  }, [groups]);
-
-  const onDrop = useCallback((e, toGroupId) => {
-    e.preventDefault();
-    const payload = drag;
-    setDrag(null);
-    setDropTargetId(null);
-    if (!payload || payload.fromGroupId === toGroupId) return;
-    moveMember(payload.user, payload.fromGroupId, toGroupId);
-  }, [drag, moveMember]);
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return groups;
-    const q = search.trim().toLowerCase();
-    return groups.filter((g) => {
-      if ((g.name || '').toLowerCase().includes(q)) return true;
-      if ((g.language || '').toLowerCase().includes(q)) return true;
-      if ((g.type || '').toLowerCase().includes(q)) return true;
-      return (g.members || []).some((m) =>
-        memberLabel(m).toLowerCase().includes(q)
-        || (m.email || '').toLowerCase().includes(q),
-      );
-    });
-  }, [groups, search]);
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3 justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-ink-primary">Groups</h2>
-          <p className="text-sm text-ink-secondary mt-0.5">
-            Telesales and Senior groups (one per language).
-            {canDrag && (
-              <span className="ml-1.5 text-foreground">
-                Drag members between groups to reassign.
-              </span>
-            )}
-          </p>
-        </div>
-        <div className="relative">
-          <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search groups or members"
-            className="h-8 pl-8 w-64"
-          />
-        </div>
-      </div>
-
-      {err && (
-        <Card className="border-amber-500/30 bg-amber-500/5">
-          <CardContent className="p-3 text-sm text-amber-700 dark:text-amber-400 flex items-center gap-2">
-            <AlertCircle size={14} />
-            {err}
-          </CardContent>
-        </Card>
-      )}
-
-      {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Card key={i} className="h-48 animate-pulse">
-              <CardContent className="p-4" />
-            </Card>
-          ))}
-        </div>
-      ) : filtered.length === 0 ? (
-        <EmptyState
-          icon={Users2}
-          title={search ? 'No matches' : 'No groups yet'}
-          message={search ? 'Try a different search term.' : 'Groups load from /api/v1/groups.'}
-        />
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((g) => (
-            <GroupCard
-              key={g.id}
-              group={g}
-              canDrag={canDrag}
-              draggingMemberId={drag ? `${drag.fromGroupId}:${drag.user.id}` : null}
-              dropTargetId={dropTargetId}
-              onDragStart={onDragStart}
-              onDragEnd={onDragEnd}
-              onDragOver={onDragOver}
-              onDragLeave={onDragLeave}
-              onDrop={onDrop}
-              isMoving={movingGroupId === g.id}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from '@/components/ui/dialog';
+import { LanguageBadge } from '@/components/shared/LanguageBadge';
+import RoleGuard from '@/components/layout/RoleGuard';
+import { ManageFieldsButton } from '@/components/dynamic/EditableForm';
+import GroupDialog from '@/components/groups/GroupDialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { LANGUAGES } from '@/lib/languages';
+import api from '@/lib/api';
 
 export default function GroupsPage() {
   return (
-    <RoleGuard allow={['super_admin', 'admin', 'floor_manager']}>
-      <GroupsBoard />
+    <RoleGuard allowedRoles={['super_admin', 'admin', 'floor_manager']}>
+      <GroupsContent />
     </RoleGuard>
+  );
+}
+
+function GroupsContent() {
+  const [groups, setGroups] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [addingTo, setAddingTo] = useState(null);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [editingGroup, setEditingGroup] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get('/groups');
+      const list = Array.isArray(data.data) ? data.data : (data.data.items || []);
+      const withMembers = await Promise.all(list.map(async (g) => {
+        try {
+          const { data: m } = await api.get(`/groups/${g.id}/members`);
+          return { ...g, members: m.data || [] };
+        } catch { return { ...g, members: [] }; }
+      }));
+      setGroups(withMembers);
+    } catch (e) {
+      toast.error('Failed to load groups');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleRemove = async (groupId, userId, userName) => {
+    if (!confirm(`Remove ${userName} from this group?`)) return;
+    try {
+      await api.delete(`/groups/${groupId}/members/${userId}`);
+      toast.success('Removed');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-xl font-semibold">Groups</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Telesellers can belong to multiple groups
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <ManageFieldsButton entityType="group" size="sm" />
+          <Button size="sm" onClick={() => setCreatingGroup(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1.5" /> New group
+          </Button>
+        </div>
+      </div>
+
+      {loading && <p className="text-xs text-muted-foreground">Loading...</p>}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {groups.map((g) => (
+          <Card key={g.id}>
+            <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle className="text-sm flex items-center gap-2">
+                  {g.name}
+                  {g.language && <LanguageBadge language={g.language} size="xs" />}
+                </CardTitle>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  {g.members?.length || 0} member{(g.members?.length || 0) !== 1 ? 's' : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7"
+                  onClick={() => setEditingGroup(g)}
+                  title="Edit group + custom fields"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  className="h-7 w-7 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10"
+                  onClick={() => setAddingTo(g)}
+                  title="Add member"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {(g.members?.length || 0) === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-3">
+                  No members yet — click + to add
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {g.members.map((m) => (
+                    <div
+                      key={m.membership_id}
+                      className="inline-flex items-center gap-1.5 px-2 py-1 rounded border bg-background/50 group"
+                    >
+                      <div className="w-5 h-5 rounded-full bg-purple-500/15 text-purple-300 flex items-center justify-center text-[9px] font-medium">
+                        {m.user?.first_name?.[0]}{m.user?.last_name?.[0]}
+                      </div>
+                      <span className="text-xs">
+                        {m.user?.first_name} {m.user?.last_name}
+                      </span>
+                      {m.is_senior && (
+                        <Crown
+                          className="h-2.5 w-2.5 text-amber-400"
+                          aria-label="Senior"
+                        />
+                      )}
+                      <button
+                        onClick={() => handleRemove(g.id, m.user.id, m.user.first_name)}
+                        className="text-muted-foreground hover:text-red-400 transition-colors ml-1"
+                        title="Remove from group"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <AddMemberDialog
+        group={addingTo}
+        allGroups={groups}
+        onClose={() => setAddingTo(null)}
+        onAdded={load}
+      />
+
+      <GroupDialog
+        open={creatingGroup}
+        onOpenChange={setCreatingGroup}
+        group={null}
+        onSaved={load}
+      />
+      <GroupDialog
+        open={!!editingGroup}
+        onOpenChange={(o) => { if (!o) setEditingGroup(null); }}
+        group={editingGroup}
+        onSaved={load}
+      />
+    </div>
+  );
+}
+
+function AddMemberDialog({ group, allGroups = [], onClose, onAdded }) {
+  const [candidates, setCandidates] = useState([]);
+  const [search, setSearch] = useState('');
+  const [language, setLanguage] = useState('');
+  const [inGroup, setInGroup] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  // Reset filters whenever the dialog opens on a different group.
+  useEffect(() => {
+    if (!group) return;
+    setSearch('');
+    setLanguage('');
+    setInGroup('');
+    setRoleFilter('');
+  }, [group?.id]);
+
+  useEffect(() => {
+    if (!group) return undefined;
+    const t = setTimeout(() => {
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (language) params.set('language', language);
+      if (inGroup) params.set('in_group', inGroup);
+      if (roleFilter) params.set('role', roleFilter);
+      api
+        .get(`/groups/${group.id}/candidates?${params.toString()}`)
+        .then(({ data }) => setCandidates(data.data || []))
+        .catch(() => {});
+    }, 200);
+    return () => clearTimeout(t);
+  }, [group, search, language, inGroup, roleFilter]);
+
+  const activeFilterCount = [language, inGroup, roleFilter].filter(Boolean).length;
+  const clearFilters = () => {
+    setLanguage('');
+    setInGroup('');
+    setRoleFilter('');
+  };
+  const otherGroups = (allGroups || []).filter((g) => g.id !== group?.id);
+
+  const add = async (userId) => {
+    setAdding(true);
+    try {
+      await api.post(`/groups/${group.id}/members`, { user_id: userId });
+      toast.success('Added');
+      onAdded?.();
+      onClose();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed');
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  if (!group) return null;
+
+  return (
+    <Dialog open={!!group} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add member to {group.name}</DialogTitle>
+          <DialogDescription className="text-xs">
+            Pick a teleseller or senior. They can be in multiple groups.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="h-3.5 w-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search by name or email..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9 h-9 text-sm"
+              autoFocus
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={language || 'all'}
+              onValueChange={(v) => setLanguage(v === 'all' ? '' : v)}
+            >
+              <SelectTrigger className="h-8 text-xs w-[140px]">
+                <SelectValue placeholder="Language" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All languages</SelectItem>
+                {LANGUAGES.map((l) => (
+                  <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={inGroup || 'all'}
+              onValueChange={(v) => setInGroup(v === 'all' ? '' : v)}
+            >
+              <SelectTrigger className="h-8 text-xs w-[180px]">
+                <SelectValue placeholder="In group" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Any group</SelectItem>
+                {otherGroups.map((g) => (
+                  <SelectItem key={g.id} value={g.id}>
+                    {g.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={roleFilter || 'all'}
+              onValueChange={(v) => setRoleFilter(v === 'all' ? '' : v)}
+            >
+              <SelectTrigger className="h-8 text-xs w-[130px]">
+                <SelectValue placeholder="Role" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Both</SelectItem>
+                <SelectItem value="tele_sales">Telesellers</SelectItem>
+                <SelectItem value="senior">Seniors</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {activeFilterCount > 0 && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="text-[10px] text-muted-foreground hover:text-red-400 inline-flex items-center gap-1"
+              >
+                <X className="h-2.5 w-2.5" />Clear filters
+              </button>
+            )}
+          </div>
+
+          <p className="text-[10px] text-muted-foreground">
+            {candidates.length === 100
+              ? 'Showing first 100 matches — narrow with filters above.'
+              : `${candidates.length} candidate${candidates.length === 1 ? '' : 's'}`}
+          </p>
+          <div className="max-h-80 overflow-y-auto divide-y border rounded-md">
+            {candidates.length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-6">
+                No more telesellers or seniors to add. Everyone matching is already a member.
+              </p>
+            )}
+            {candidates.map((u) => (
+              <div
+                key={u.id}
+                className="flex items-center justify-between gap-2 p-2.5 hover:bg-muted/20"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-7 h-7 rounded-full bg-purple-500/15 text-purple-300 flex items-center justify-center text-[10px] font-medium">
+                    {u.first_name?.[0]}{u.last_name?.[0]}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs">
+                      {u.first_name} {u.last_name}{' '}
+                      <span className="text-muted-foreground capitalize">
+                        · {u.role?.replace(/_/g, ' ')}
+                      </span>
+                    </p>
+                    <div className="flex gap-1 mt-0.5">
+                      {(u.languages || []).slice(0, 3).map((l) => (
+                        <LanguageBadge key={l} language={l} size="xs" />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  disabled={adding}
+                  onClick={() => add(u.id)}
+                >
+                  <Plus className="h-3 w-3 mr-1" />Add
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

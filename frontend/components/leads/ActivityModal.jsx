@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { PhoneCall, StickyNote, MessageSquare, Mail, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import Modal from '@/components/shared/Modal';
 import api from '@/lib/api';
+import { DynamicFields, ManageFieldsButton } from '@/components/dynamic/EditableForm';
 
 const TABS = [
   { key: 'call',     label: 'Call',     icon: PhoneCall },
@@ -32,15 +33,22 @@ export default function ActivityModal({ open, onClose, leadId, onSaved }) {
   const [outcome, setOutcome] = useState('connected');
   const [notes, setNotes] = useState('');
   const [body, setBody] = useState('');
+  // Custom fields on the activity itself (e.g. "Outcome category" dropdown
+  // defined on lead_activity entity_type). Sent through alongside the
+  // native payload; backend's addActivity validates via Terminal BB wiring.
+  const [customFields, setCustomFields] = useState({});
+
+  useEffect(() => { if (open) setCustomFields({}); }, [open]);
 
   const reset = () => {
     setCallMin(''); setCallSec(''); setOutcome('connected'); setNotes(''); setBody('');
+    setCustomFields({});
   };
 
   const submit = async () => {
     setSubmitting(true);
     try {
-      const payload = tab === 'call'
+      const nativePayload = tab === 'call'
         ? {
             type: 'call',
             duration_seconds: (Number(callMin || 0) * 60) + Number(callSec || 0),
@@ -48,6 +56,7 @@ export default function ActivityModal({ open, onClose, leadId, onSaved }) {
             notes,
           }
         : { type: tab, content: body };
+      const payload = { ...nativePayload, custom_fields: customFields };
 
       await api.post(`/leads/${leadId}/activities`, payload);
       toast.success('Activity logged');
@@ -70,6 +79,7 @@ export default function ActivityModal({ open, onClose, leadId, onSaved }) {
       size="md"
       footer={
         <>
+          <ManageFieldsButton entityType="lead_activity" label="Manage fields" size="sm" />
           <button className="btn-ghost text-sm" onClick={onClose}>Cancel</button>
           <button className="btn-primary text-sm" onClick={submit} disabled={submitting}>
             {submitting ? <Loader2 size={14} className="animate-spin" /> : null}
@@ -141,6 +151,17 @@ export default function ActivityModal({ open, onClose, leadId, onSaved }) {
           />
         </div>
       )}
+
+      {/* Custom activity fields (lead_activity entity_type). Renders only
+          when an admin has defined fields for activities; otherwise the
+          DynamicFields component returns null. */}
+      <div className="mt-4 pt-4 border-t">
+        <DynamicFields
+          entityType="lead_activity"
+          values={customFields}
+          onChange={setCustomFields}
+        />
+      </div>
     </Modal>
   );
 }

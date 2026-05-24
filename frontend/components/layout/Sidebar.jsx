@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Users, UserCog, Building2, Megaphone,
-  BarChart3, Webhook, Settings, X, TrendingUp, LogOut, FlaskConical, Shield, Eye, Award, Undo2, Activity, Route,
+  BarChart3, Webhook, Settings, Settings2, X, TrendingUp, LogOut, FlaskConical, Shield, Eye, Award, Undo2, Activity, Route,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -53,9 +53,10 @@ const NAV_GROUPS = [
   {
     label: 'System',
     items: [
-      { href: '/permissions', label: 'Permissions', icon: Shield,        roles: ['super_admin'] },
-      { href: '/trial-leads', label: 'Trial Leads', icon: FlaskConical,  roles: ['super_admin'] },
-      { href: '/settings',    label: 'Settings',    icon: Settings,      roles: ADMIN },
+      { href: '/permissions',     label: 'Permissions',   icon: Shield,        roles: ['super_admin'] },
+      { href: '/trial-leads',      label: 'Trial Leads',   icon: FlaskConical,  roles: ['super_admin'] },
+      { href: '/settings/fields',  label: 'Custom fields', icon: Settings2,     roles: ['super_admin', 'schema_editor'] },
+      { href: '/settings',         label: 'Settings',      icon: Settings,      roles: ADMIN },
     ],
   },
 ];

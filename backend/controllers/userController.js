@@ -4,6 +4,13 @@ const { success, error, paginated } = require('../utils/responseHelper');
 const { signAccessToken } = require('../utils/jwtUtils');
 const { PERMISSION_DEFINITIONS } = require('../utils/permissionDefaults');
 const { invalidateUser } = require('../utils/permissions');
+const {
+  processIncomingCustomFields,
+  applyCustomFieldFilters,
+  attachDefinitionsToResponse,
+  isSkipValidationAllowed,
+  recordBypassAudit,
+} = require('../utils/customFieldIntegration');
 
 const VALID_PERMISSION_LEVELS = ['none', 'all', 'own', 'group', 'read'];
 const PERMISSION_KEYS = new Set(PERMISSION_DEFINITIONS.map(([k]) => k));
@@ -11,7 +18,7 @@ const PERMISSION_KEYS = new Set(PERMISSION_DEFINITIONS.map(([k]) => k));
 // Roles a non-super_admin admin is allowed to create. super_admin can create
 // anything except another super_admin.
 const ROLES_ADMIN_CAN_CREATE = ['tele_sales', 'senior', 'back_office', 'custom'];
-const ROLES_SUPER_ADMIN_CAN_CREATE = ['admin', 'tele_sales', 'senior', 'back_office', 'custom'];
+const ROLES_SUPER_ADMIN_CAN_CREATE = ['admin', 'schema_editor', 'tele_sales', 'senior', 'back_office', 'custom'];
 
 function normalizePermissionsPayload(raw) {
   // Accept either { 'leads.view': 'all', ... } or [{ key, level }, ...].
@@ -98,8 +105,12 @@ async function list(req, res) {
     ];
   }
 
+  // Custom-field filters — any `cf_<field_key>=value` query param becomes
+  // a JSONB ->> predicate on the user row's custom_fields blob.
+  const finalWhere = applyCustomFieldFilters(where, req.query);
+
   const { rows, count } = await User.findAndCountAll({
-    where,
+    where: finalWhere,
     order: [[sortBy, sortOrder]],
     limit,
     offset,
@@ -163,6 +174,16 @@ async function create(req, res) {
     body.languages = [];
   }
 
+  // Validate any custom_fields blob against the registry for the `user`
+  // entity. Reject the whole create on the first schema error. Privileged
+  // roles may pass ?skip_validation=true; audit-logged after the user row
+  // is created (we need its id for the audit's resource_id).
+  const allowSkipUserCreate = isSkipValidationAllowed(req);
+  const { custom_fields: cfValidated, errors: cfErrors, bypassed: bypassedUserCreate } =
+    await processIncomingCustomFields('user', body, null, { skip_validation: allowSkipUserCreate });
+  if (cfErrors.length) return error(res, cfErrors.join('; '), 400);
+  body.custom_fields = cfValidated;
+
   // Strip `permissions` before passing to User.create — it isn't a User column.
   const { permissions: _stripPermissions, ...userData } = body;
 
@@ -181,6 +202,12 @@ async function create(req, res) {
   });
 
   if (permsToSeed) invalidateUser(created.id);
+
+  if (bypassedUserCreate) {
+    await recordBypassAudit({
+      AuditLog, req, resource: 'User', resourceId: created.id, incoming: body.custom_fields,
+    });
+  }
 
   return success(res, created.toSafeJSON(), 'Created', 201);
 }
@@ -301,8 +328,92 @@ async function update(req, res) {
     if (req.body[k] !== undefined) user[k] = req.body[k];
   }
   if (req.body.password) user.password = req.body.password; // hook re-hashes
+
+  let bypassedUserUpdate = false;
+  if (req.body.custom_fields !== undefined) {
+    const allowSkip = isSkipValidationAllowed(req);
+    const { custom_fields: cfMerged, errors: cfErrors, bypassed } =
+      await processIncomingCustomFields(
+        'user',
+        { custom_fields: req.body.custom_fields },
+        user,
+        { skip_validation: allowSkip },
+      );
+    if (cfErrors.length) return error(res, cfErrors.join('; '), 400);
+    user.custom_fields = cfMerged;
+    bypassedUserUpdate = !!bypassed;
+  }
+
   await user.save();
+
+  if (bypassedUserUpdate) {
+    await recordBypassAudit({
+      AuditLog, req, resource: 'User', resourceId: user.id, incoming: user.custom_fields,
+    });
+  }
   return success(res, user.toSafeJSON(), 'Updated');
+}
+
+// GET /api/v1/users/workload?role=tele_sales
+// Returns one row per active user in the requested role:
+//   { user_id, open_lead_count }
+// "Open" = assigned to the user and not in a terminal state (ftd_done /
+// cold / not_interested / unassigned). The assignee dropdown uses this to
+// show the lightest-loaded teleseller first.
+async function workload(req, res) {
+  try {
+    const role = req.query.role || 'tele_sales';
+
+    const counts = await Lead.findAll({
+      where: {
+        assigned_to_id: { [Op.ne]: null },
+        lead_status: { [Op.notIn]: ['ftd_done', 'cold', 'not_interested', 'unassigned'] },
+      },
+      attributes: [
+        'assigned_to_id',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'open_lead_count'],
+      ],
+      group: ['assigned_to_id'],
+      raw: true,
+    });
+
+    const activeUsers = await User.findAll({
+      where: { is_active: true, role },
+      attributes: ['id'],
+      raw: true,
+    });
+    const allowedIds = new Set(activeUsers.map((u) => u.id));
+
+    const result = counts
+      .filter((c) => allowedIds.has(c.assigned_to_id))
+      .map((c) => ({
+        user_id: c.assigned_to_id,
+        open_lead_count: parseInt(c.open_lead_count, 10),
+      }));
+
+    // Include zero-count users so the dropdown can show "0 open" instead
+    // of treating them as if they don't exist.
+    for (const u of activeUsers) {
+      if (!result.find((r) => r.user_id === u.id)) {
+        result.push({ user_id: u.id, open_lead_count: 0 });
+      }
+    }
+
+    return success(res, result);
+  } catch (e) {
+    return error(res, e.message, 500);
+  }
+}
+
+// GET /api/v1/users/:id/with-fields — same as getOne but enriched with
+// custom_fields_with_meta so the UI can render dynamic field cards.
+async function getWithFieldDefs(req, res) {
+  const user = await User.findByPk(req.params.id, {
+    include: [{ model: Group, as: 'groups', through: { attributes: ['rr_index', 'is_active'] } }],
+  });
+  if (!user) return error(res, 'User not found', 404);
+  const enriched = await attachDefinitionsToResponse('user', user);
+  return success(res, enriched);
 }
 
 async function remove(req, res) {
@@ -660,4 +771,6 @@ module.exports = {
   changeLanguage, byLanguage, languageStats,
   getPermissions, setPermissions,
   deactivate, activate, resetPassword, impersonate, listDeleted, restoreUser,
+  getWithFieldDefs,
+  workload,
 };

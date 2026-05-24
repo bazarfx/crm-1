@@ -22,6 +22,8 @@ import {
 } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import StatusBadge from '@/components/shared/StatusBadge';
+import { AssigneeDropdown } from '@/components/shared/AssigneeDropdown';
+import { DynamicFields, ManageFieldsButton } from '@/components/dynamic/EditableForm';
 import { cn } from '@/lib/utils';
 
 dayjs.extend(relativeTime);
@@ -393,6 +395,7 @@ export default function LeadDetailPage() {
 
             {/* Right: primary actions */}
             <div className="flex items-center gap-2 flex-wrap">
+              <ManageFieldsButton entityType="lead" label="Manage fields" size="sm" />
               {hasChanges && (
                 <Button onClick={handleSave} disabled={saving}>
                   <Save className="h-3.5 w-3.5 mr-1.5" /> {saving ? 'Saving…' : 'Save changes'}
@@ -625,6 +628,15 @@ export default function LeadDetailPage() {
                   <Field label="Trading experience" name="trading_experience" value={form.trading_experience} onChange={updateField} disabled={!canEdit} options={EXPERIENCE} />
                   <Field label="Preferred market"   name="preferred_market"   value={form.preferred_market}   onChange={updateField} disabled={!canEdit} options={MARKETS} />
                   <Field label="Investment budget"  name="investment_budget"  value={form.investment_budget}  onChange={updateField} disabled={!canEdit} type="number" />
+                  {/* Custom fields live next to the native ones — no
+                      separate ghetto card. Admins add/edit the schema via
+                      the "Manage fields" button in the page header. */}
+                  <DynamicFields
+                    entityType="lead"
+                    values={form.custom_fields || {}}
+                    onChange={(cf) => updateField('custom_fields', cf)}
+                    disabled={!canEdit}
+                  />
                 </CardContent>
               </Card>
             </TabsContent>
@@ -722,23 +734,20 @@ export default function LeadDetailPage() {
                 <Label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                   Assigned to
                 </Label>
-                <Select
+                <AssigneeDropdown
                   value={form.assigned_to_id || ''}
-                  onValueChange={(v) => updateField('assigned_to_id', v)}
+                  onChange={(v) => updateField('assigned_to_id', v)}
+                  leadLanguage={lead?.language}
+                  role={lead?.lead_source === 'direct_ark' ? 'senior' : 'tele_sales'}
                   disabled={!canEditAll}
-                >
-                  <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="Unassigned" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {telesellers.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.first_name} {t.last_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {!canEditAll && (
+                  placeholder="Unassigned"
+                />
+                {!canEditAll && lead?.assignedTo && (
+                  <p className="text-[10px] text-muted-foreground">
+                    Currently {lead.assignedTo.first_name} {lead.assignedTo.last_name}. Reassignment requires floor manager or admin.
+                  </p>
+                )}
+                {!canEditAll && !lead?.assignedTo && (
                   <p className="text-[10px] text-muted-foreground">
                     Reassignment requires floor manager or admin.
                   </p>

@@ -19,6 +19,7 @@ const UserPermission = require('./UserPermission');
 const DealUndoRequest = require('./DealUndoRequest');
 const RoutingRule = require('./RoutingRule');
 const RRPointer = require('./RRPointer');
+const FieldDefinition = require('./FieldDefinition');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ASSOCIATIONS
@@ -46,6 +47,11 @@ User.belongsToMany(Group, {
 });
 GroupMember.belongsTo(Group, { foreignKey: 'group_id' });
 GroupMember.belongsTo(User, { foreignKey: 'user_id' });
+// Aliased duplicates so include({ as: 'user' / 'group' }) works in newer
+// endpoints (dashboard, candidate listing, member listing). The unaliased
+// associations above are kept for existing callers.
+GroupMember.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+GroupMember.belongsTo(Group, { foreignKey: 'group_id', as: 'group' });
 Group.hasMany(GroupMember, { foreignKey: 'group_id', as: 'memberships' });
 User.hasMany(GroupMember, { foreignKey: 'user_id', as: 'memberships' });
 
@@ -134,6 +140,12 @@ User.hasMany(DealUndoRequest, { foreignKey: 'requested_by_user_id', as: 'undoReq
 // fetches by target_type + target_id explicitly.
 RoutingRule.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
 
+// FieldDefinition — dynamic custom-field registry. Both audit-author edges
+// resolve to User. Polymorphic over entity_type (lead/user/deal/…) so there's
+// no association to a target entity; the validator looks it up by string.
+FieldDefinition.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
+FieldDefinition.belongsTo(User, { foreignKey: 'archived_by', as: 'archivedBy' });
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SYNC
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,4 +178,5 @@ module.exports = {
   DealUndoRequest,
   RoutingRule,
   RRPointer,
+  FieldDefinition,
 };

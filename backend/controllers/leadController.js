@@ -13,6 +13,13 @@ const { success, error, paginated } = require('../utils/responseHelper');
 const { detectFtdTransition, buildCloserSnapshot } = require('../utils/dealAttribution');
 const { assignLeadRoundRobin } = require('../utils/roundRobin');
 const { autoAssignLead } = require('../utils/leadAutoAssign');
+const {
+  processIncomingCustomFields,
+  applyCustomFieldFilters,
+  attachDefinitionsToResponse,
+  isSkipValidationAllowed,
+  recordBypassAudit,
+} = require('../utils/customFieldIntegration');
 
 // ─── Assignment helpers ───────────────────────────────────────────────────
 // Leads are ASSIGNED to a user — not owned. These helpers reflect that.
@@ -132,12 +139,28 @@ async function list(req, res) {
     if (req.query.to) where.created_at[Op.lte] = new Date(req.query.to);
   }
 
+  // Custom-field filters: any `cf_<field_key>=value` query param is
+  // appended as a JSONB ->> predicate. Keys are whitelisted snake_case;
+  // values are passed through sequelize.where with bind parameters.
+  // Qualify with "Lead" because INCLUDE_ASSIGNEE joins users (which also
+  // has a custom_fields column post-AA migration).
+  const finalWhere = applyCustomFieldFilters(where, req.query, 'Lead');
+
+  // `distinct: true` + `col: 'id'` makes Sequelize count distinct lead IDs
+  // rather than the join-multiplied row count from INCLUDE_ASSIGNEE.
+  // `subQuery: false` keeps LIMIT/OFFSET working with the includes — without
+  // it Sequelize wraps the query in a subselect and the includes' WHERE
+  // conditions silently drop. The combination is the canonical "don't
+  // multiply rows from an include" pattern for findAndCountAll.
   const result = await Lead.findAndCountAll({
-    where,
+    where: finalWhere,
     order: [[sortBy, sortOrder]],
     limit,
     offset,
     include: INCLUDE_ASSIGNEE,
+    distinct: true,
+    col: 'id',
+    subQuery: false,
   });
 
   // Spec test 1/2 expect `data.items` + `data.pagination`. paginated() puts rows
@@ -192,6 +215,28 @@ async function create(req, res) {
 
   if (!body.phone) return error(res, 'phone is required', 400);
 
+  // Idempotency guard: if an active lead with this phone (or facebook_lead_id)
+  // already exists, return it instead of double-creating. The partial unique
+  // index on leads(phone) WHERE deleted_at IS NULL would also block the insert,
+  // but the explicit check gives the caller a clean 200 + existing row payload
+  // rather than a 500 from a constraint violation.
+  const dupOr = [{ phone: body.phone }];
+  if (body.facebook_lead_id) dupOr.push({ facebook_lead_id: body.facebook_lead_id });
+  const dup = await Lead.findOne({ where: { [Op.or]: dupOr } });
+  if (dup) {
+    return success(res, dup, 'Lead already exists — returning existing row', 200);
+  }
+
+  // Validate + coerce any custom_fields payload BEFORE auto-assigning, so a
+  // bad schema patch rejects fast without burning a round-robin slot.
+  // super_admin / schema_editor can pass ?skip_validation=true to bypass
+  // (heavily audit-logged below) — anyone else gets the validated path.
+  const allowSkipCreate = isSkipValidationAllowed(req);
+  const { custom_fields, errors: cfErrors, bypassed: bypassedCreate } =
+    await processIncomingCustomFields('lead', body, null, { skip_validation: allowSkipCreate });
+  if (cfErrors.length) return error(res, cfErrors.join('; '), 400);
+  body.custom_fields = custom_fields;
+
   let assignmentReason = null;
   if (!body.assigned_to_id) {
     try {
@@ -235,6 +280,12 @@ async function create(req, res) {
     new_data: lead.toJSON(),
     ip_address: req.ip,
   });
+
+  if (bypassedCreate) {
+    await recordBypassAudit({
+      AuditLog, req, resource: 'Lead', resourceId: lead.id, incoming: body.custom_fields,
+    });
+  }
   return success(res, lead, 'Lead created', 201);
 }
 
@@ -256,15 +307,37 @@ async function update(req, res) {
 
   const updates = {};
   const oldStatus = lead.lead_status;
+  let customFieldsPatch = null;
   for (const k of Object.keys(req.body)) {
     if (k === 'lead_owner_id') {
       if (restrictToWhitelist || PROTECTED.includes('assigned_to_id')) continue;
       updates.assigned_to_id = req.body[k];
       continue;
     }
+    if (k === 'custom_fields') {
+      // tele_sales / senior CAN edit custom_fields on their own leads — the
+      // per-field editable_by_roles guard happens inside the validator. We
+      // don't whitelist-block it like the legacy native fields.
+      customFieldsPatch = req.body[k];
+      continue;
+    }
     if (PROTECTED.includes(k)) continue;
     if (restrictToWhitelist && !LIMITED_EDIT_FIELDS.includes(k)) continue;
     updates[k] = req.body[k];
+  }
+
+  let bypassedUpdate = false;
+  if (customFieldsPatch !== null) {
+    const allowSkip = isSkipValidationAllowed(req);
+    const { custom_fields, errors: cfErrors, bypassed } = await processIncomingCustomFields(
+      'lead',
+      { custom_fields: customFieldsPatch },
+      lead,
+      { skip_validation: allowSkip },
+    );
+    if (cfErrors.length) return error(res, cfErrors.join('; '), 400);
+    updates.custom_fields = custom_fields;
+    bypassedUpdate = !!bypassed;
   }
 
   // Detect ftd_done / ftd_at transition and snapshot the closer, same as
@@ -360,7 +433,7 @@ async function update(req, res) {
             {
               lead_id: lead.id,
               user_id: req.user.id,
-              activity_type: 'reassignment',
+              activity_type: 'reassignment_history',
               title: sameAssignee
                 ? `Re-routed (${newPreferred}) — kept with same agent`
                 : `Re-routed via round-robin (${newPreferred})`,
@@ -369,6 +442,14 @@ async function update(req, res) {
                 : `Preferred language changed ${oldPreferred || '—'} → ${newPreferred}. Routed to ${rr.user.first_name || ''} ${rr.user.last_name || ''}`.trim(),
               old_value: oldAssigneeId || '',
               new_value: newAssigneeId,
+              metadata: {
+                is_historical: true,
+                old_assignee_id: oldAssigneeId,
+                new_assignee_id: newAssigneeId,
+                trigger: 'auto_reroute_on_preferred_language',
+                old_preferred_language: oldPreferred || null,
+                new_preferred_language: newPreferred,
+              },
             },
             { transaction: tx },
           );
@@ -444,6 +525,12 @@ async function update(req, res) {
     new_data: lead.toJSON(),
     ip_address: req.ip,
   });
+
+  if (bypassedUpdate) {
+    await recordBypassAudit({
+      AuditLog, req, resource: 'Lead', resourceId: lead.id, incoming: updates.custom_fields,
+    });
+  }
 
   const refreshed = await Lead.findByPk(lead.id, { include: INCLUDE_ASSIGNEE });
   const message = reroutedTo
@@ -551,19 +638,36 @@ async function assign(req, res) {
   }
 
   const oldAssigneeId = lead.assigned_to_id;
+  const oldAssignee = oldAssigneeId ? await User.findByPk(oldAssigneeId) : null;
+  const oldAssigneeName = oldAssignee
+    ? `${oldAssignee.first_name || ''} ${oldAssignee.last_name || ''}`.trim()
+    : 'unassigned';
+  const newAssigneeName = `${newAssignee.first_name || ''} ${newAssignee.last_name || ''}`.trim();
+
   await lead.update({
     previous_assigned_to_id: oldAssigneeId,
     assigned_to_id: newAssigneeId,
   });
 
+  // Activity rows are HISTORY, not current state. Explicit type +
+  // `is_historical: true` metadata so no frontend code accidentally reads
+  // an activity user_id and renders it as the lead's current assignee.
   await LeadActivity.create({
     lead_id: lead.id,
     user_id: req.user.id,
-    activity_type: 'reassignment',
-    title: 'Lead reassigned',
-    description: `Assigned to ${newAssignee.first_name} ${newAssignee.last_name}${reason ? `. Reason: ${reason}` : ''}`,
+    activity_type: 'reassignment_history',
+    title: `Reassigned from ${oldAssigneeName} to ${newAssigneeName}`,
+    description: `Lead reassignment event — NOT a current assignment. Current assignee is ${newAssigneeName}.${reason ? ` Reason: ${reason}` : ''}`,
     old_value: oldAssigneeId || '',
     new_value: newAssigneeId,
+    metadata: {
+      is_historical: true,
+      old_assignee_id: oldAssigneeId,
+      old_assignee_name: oldAssigneeName,
+      new_assignee_id: newAssigneeId,
+      new_assignee_name: newAssigneeName,
+      reason: reason || null,
+    },
   });
 
   await AuditLog.create({
@@ -610,11 +714,25 @@ async function addActivity(req, res) {
     return error(res, 'You can only log activity on leads assigned to you', 403);
   }
 
+  // Validate any custom_fields blob on the activity itself (e.g. an
+  // "Outcome category" dropdown defined as a lead_activity field).
+  const allowSkip = isSkipValidationAllowed(req);
+  const { custom_fields, errors: cfErrors, bypassed } =
+    await processIncomingCustomFields('lead_activity', req.body || {}, null, { skip_validation: allowSkip });
+  if (cfErrors.length) return error(res, cfErrors.join('; '), 400);
+
   const activity = await LeadActivity.create({
     ...req.body,
+    custom_fields,
     lead_id: lead.id,
     user_id: req.user.id,
   });
+
+  if (bypassed) {
+    await recordBypassAudit({
+      AuditLog, req, resource: 'LeadActivity', resourceId: activity.id, incoming: custom_fields,
+    });
+  }
 
   if (req.body?.activity_type === 'call') {
     await lead.update({
@@ -750,8 +868,10 @@ async function logCall(req, res) {
 async function reassignmentsFromMe(req, res) {
   const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
   const since = req.query.since ? new Date(req.query.since) : null;
+  // Accept either the legacy `reassignment` type or the new explicit
+  // `reassignment_history` type — same semantics, just clearer naming.
   const where = {
-    activity_type: 'reassignment',
+    activity_type: { [Op.in]: ['reassignment', 'reassignment_history'] },
     old_value: String(req.user.id),
   };
   if (since && !Number.isNaN(since.getTime())) {
@@ -922,9 +1042,29 @@ async function bulkAssign(req, res) {
   return success(res, { results, total: results.length }, `${okCount} leads assigned`);
 }
 
+// ─── Detail with field definitions ───────────────────────────────────────
+// Returns the same lead getOne returns, but with a `custom_fields_with_meta`
+// envelope: one entry per active FieldDefinition, value alongside label,
+// type, options, etc. Lets a detail page render every field without a
+// second round-trip to /field-definitions.
+async function getWithFieldDefs(req, res) {
+  const lead = await Lead.findByPk(req.params.id, { include: INCLUDE_ASSIGNEE });
+  if (!lead) return error(res, 'Lead not found', 404);
+
+  if ((req.user.role === 'tele_sales' || req.user.role === 'senior')
+      && !isAssignedToMe(req.user, lead)
+      && !isClosedByMe(req.user, lead)) {
+    return error(res, 'You can only view leads assigned to you or deals you closed', 403);
+  }
+
+  const enriched = await attachDefinitionsToResponse('lead', lead);
+  return success(res, enriched);
+}
+
 module.exports = {
   list, getOne, create, update, updateStatus, assign, reassign,
   softDelete, remove: softDelete, addActivity, getActivities,
   addNote, logCall, exportCsv, reassignmentsFromMe,
   unassignedSummary, bulkAssign,
+  getWithFieldDefs,
 };

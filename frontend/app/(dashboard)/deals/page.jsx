@@ -17,6 +17,10 @@ import { Input } from '@/components/ui/input';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { DynamicFilterBar } from '@/components/dynamic/DynamicFilterBar';
+import { useDynamicColumns } from '@/components/dynamic/DynamicColumns';
+import { DynamicCell } from '@/components/dynamic/DynamicCell';
+import { ManageFieldsButton } from '@/components/dynamic/EditableForm';
 
 const SOURCE_LABEL = {
   facebook_ads:   'Facebook Ads',
@@ -92,6 +96,10 @@ export default function DealsPage() {
   const [assignees, setAssignees] = useState([]);
   const [groups, setGroups] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
+  const [customFilters, setCustomFilters] = useState({});
+  // Deals share the same field-definition pool as leads ('deal' entity_type
+  // is wired in the FieldDefinition registry).
+  const dynDeal = useDynamicColumns('deal');
   const [err, setErr] = useState(null);
 
   const hasActiveFilters =
@@ -129,6 +137,9 @@ export default function DealsPage() {
         ftd_from: ftdFrom || undefined,
         ftd_to: ftdTo || undefined,
       };
+      for (const k of Object.keys(customFilters)) {
+        if (customFilters[k] !== '' && customFilters[k] != null) params[k] = customFilters[k];
+      }
       const res = await api.get('/deals', { params });
       const payload = unwrap(res) || {};
       setDeals(payload.items || []);
@@ -141,7 +152,7 @@ export default function DealsPage() {
       setLoading(false);
     }
   }, [page, sortBy, search, sourceFilter, closerFilter, assigneeFilter,
-      groupFilter, campaignFilter, languageFilter, ftdFrom, ftdTo]);
+      groupFilter, campaignFilter, languageFilter, ftdFrom, ftdTo, customFilters]);
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
@@ -486,6 +497,14 @@ export default function DealsPage() {
             </>
           )}
 
+          <DynamicFilterBar
+            entityType="deal"
+            filters={customFilters}
+            onChange={(next) => { setPage(1); setCustomFilters(next); }}
+          />
+          <dynDeal.PickerButton />
+          <ManageFieldsButton entityType="deal" size="sm" />
+
           <div className="ml-auto flex items-center gap-2">
             <Select value={sortBy} onValueChange={setSortBy}>
               <SelectTrigger className="w-44 h-9 text-sm">
@@ -528,18 +547,26 @@ export default function DealsPage() {
                   <th className="text-left p-3 font-medium text-muted-foreground text-xs">Source</th>
                   <th className="text-left p-3 font-medium text-muted-foreground text-xs">Assigned to</th>
                   <th className="text-left p-3 font-medium text-muted-foreground text-xs">ARK</th>
+                  {/* Dynamic custom-field columns the admin toggled on. */}
+                  {dynDeal.customDefs
+                    .filter((d) => dynDeal.visibleColumns[d.field_key])
+                    .map((d) => (
+                      <th key={d.field_key} className="text-left p-3 font-medium text-muted-foreground text-xs">
+                        {d.label}
+                      </th>
+                    ))}
                   <th className="p-3" />
                 </tr>
               </thead>
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={8} className="p-10 text-center text-muted-foreground">Loading deals…</td>
+                    <td colSpan={8 + dynDeal.cfColumnDefs.length} className="p-10 text-center text-muted-foreground">Loading deals…</td>
                   </tr>
                 )}
                 {!loading && deals.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="p-10 text-center text-muted-foreground">
+                    <td colSpan={8 + dynDeal.cfColumnDefs.length} className="p-10 text-center text-muted-foreground">
                       No deals yet. Deals appear here when a lead completes their first deposit.
                     </td>
                   </tr>
@@ -629,6 +656,14 @@ export default function DealsPage() {
                           <span className="text-muted-foreground text-xs">—</span>
                         )}
                       </td>
+                      {/* Dynamic custom-field cells. */}
+                      {dynDeal.customDefs
+                        .filter((dd) => dynDeal.visibleColumns[dd.field_key])
+                        .map((dd) => (
+                          <td key={dd.field_key} className="p-3">
+                            <DynamicCell definition={dd} value={d.custom_fields?.[dd.field_key]} />
+                          </td>
+                        ))}
                       <td className="p-3 text-right">
                         <Button asChild size="sm" variant="ghost" className="h-7 text-xs">
                           <Link href={`/leads/${d.id}`}>

@@ -19,6 +19,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
+import { DynamicFields, ManageFieldsButton } from '@/components/dynamic/EditableForm';
 
 export default function TrialLeadsPage() {
   return (
@@ -43,6 +44,7 @@ function TrialLeadsContent() {
     campaign_id: '',
     auto_assign: true,
     trial_scenario: 'round_robin_demo',
+    custom_fields: {},
   });
   const [batchForm, setBatchForm] = useState({
     count: 5,
@@ -378,8 +380,17 @@ function TrialLeadsContent() {
                 </SelectContent>
               </Select>
             </div>
+            {/* Custom lead fields — trial leads share the `lead` entity_type
+                with real leads, so anything admins defined for leads shows
+                up here too. */}
+            <DynamicFields
+              entityType="lead"
+              values={form.custom_fields || {}}
+              onChange={(cf) => setForm((p) => ({ ...p, custom_fields: cf }))}
+            />
           </div>
           <DialogFooter>
+            <ManageFieldsButton entityType="lead" label="Manage fields" size="sm" />
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button onClick={createOne}>Create &amp; assign</Button>
           </DialogFooter>

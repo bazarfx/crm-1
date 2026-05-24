@@ -3,16 +3,18 @@
 import { forwardRef, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import clsx from 'clsx';
-import { Loader2, User, Tag, Briefcase } from 'lucide-react';
+import { Loader2, User, Tag, Briefcase, Settings2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Modal from '@/components/shared/Modal';
 import api from '@/lib/api';
 import { useStore } from '@/store/useStore';
+import { DynamicFields, ManageFieldsButton } from '@/components/dynamic/EditableForm';
 
 const SECTIONS = [
   { key: 'basic',     label: 'Basic',          icon: User },
   { key: 'classify',  label: 'Classification', icon: Tag },
   { key: 'trading',   label: 'Trading',        icon: Briefcase },
+  { key: 'custom',    label: 'Custom fields',  icon: Settings2 },
 ];
 
 const Input = forwardRef(function Input(
@@ -56,6 +58,13 @@ export default function LeadForm({ open, onClose, onSaved, initial }) {
   const config = useStore((s) => s.config);
   const [section, setSection] = useState('basic');
   const [submitting, setSubmitting] = useState(false);
+  // Custom-fields state lives outside react-hook-form because DynamicFields
+  // is a controlled, schema-driven component — RHF doesn't help it.
+  const [customFields, setCustomFields] = useState(initial?.custom_fields || {});
+
+  useEffect(() => {
+    if (open) setCustomFields(initial?.custom_fields || {});
+  }, [open, initial]);
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm({
     defaultValues: initial || {
@@ -101,9 +110,12 @@ export default function LeadForm({ open, onClose, onSaved, initial }) {
   const submit = async (data) => {
     setSubmitting(true);
     try {
-      await api.post('/leads', data);
+      // Merge cf alongside native fields. Backend's leadController.create
+      // runs the cf blob through processIncomingCustomFields automatically.
+      await api.post('/leads', { ...data, custom_fields: customFields });
       toast.success('Lead created');
       reset();
+      setCustomFields({});
       onSaved?.();
     } catch (e) {
       toast.error(e?.response?.data?.message || 'Could not create lead');
@@ -121,6 +133,7 @@ export default function LeadForm({ open, onClose, onSaved, initial }) {
       size="lg"
       footer={
         <>
+          <ManageFieldsButton entityType="lead" label="Manage fields" size="sm" />
           <button className="btn-ghost text-sm" onClick={onClose}>Cancel</button>
           <button
             className="btn-primary text-sm"
@@ -189,6 +202,14 @@ export default function LeadForm({ open, onClose, onSaved, initial }) {
             <Select label="Preferred Market" options={markets} {...register('preferred_market')} />
             <Input label="Current Platform" {...register('current_platform')} />
           </div>
+        )}
+
+        {section === 'custom' && (
+          <DynamicFields
+            entityType="lead"
+            values={customFields}
+            onChange={setCustomFields}
+          />
         )}
       </form>
     </Modal>

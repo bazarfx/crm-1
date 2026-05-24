@@ -1,6 +1,14 @@
 const { Op } = require('sequelize');
 const { Campaign, Group, CampaignGroupAssignment, Lead } = require('../models');
 const { success, error, paginated } = require('../utils/responseHelper');
+const {
+  processIncomingCustomFields,
+  applyCustomFieldFilters,
+  attachDefinitionsToResponse,
+  isSkipValidationAllowed,
+  recordBypassAudit,
+} = require('../utils/customFieldIntegration');
+const { AuditLog } = require('../models');
 
 async function list(req, res) {
   const page = Math.max(1, Number(req.query.page) || 1);
@@ -12,8 +20,10 @@ async function list(req, res) {
   if (req.query.is_active !== undefined) where.is_active = req.query.is_active === 'true';
   if (req.query.search) where.name = { [Op.iLike]: `%${req.query.search}%` };
 
+  const finalWhere = applyCustomFieldFilters(where, req.query, 'Campaign');
+
   const { rows, count } = await Campaign.findAndCountAll({
-    where,
+    where: finalWhere,
     order: [['created_at', 'DESC']],
     limit,
     offset,
@@ -43,7 +53,16 @@ async function getOne(req, res) {
 async function create(req, res) {
   const body = req.body || {};
   if (!body.name) return error(res, 'name is required', 400);
-  const campaign = await Campaign.create({ ...body, created_by: req.user.id });
+  const allowSkip = isSkipValidationAllowed(req);
+  const { custom_fields, errors: cfErrors, bypassed } =
+    await processIncomingCustomFields('campaign', body, null, { skip_validation: allowSkip });
+  if (cfErrors.length) return error(res, cfErrors.join('; '), 400);
+  const campaign = await Campaign.create({ ...body, custom_fields, created_by: req.user.id });
+  if (bypassed) {
+    await recordBypassAudit({
+      AuditLog, req, resource: 'Campaign', resourceId: campaign.id, incoming: custom_fields,
+    });
+  }
   return success(res, campaign, 'Created', 201);
 }
 
@@ -57,8 +76,35 @@ async function update(req, res) {
   for (const k of allowed) {
     if (req.body[k] !== undefined) campaign[k] = req.body[k];
   }
+  let bypassed = false;
+  if (req.body.custom_fields !== undefined) {
+    const allowSkip = isSkipValidationAllowed(req);
+    const result = await processIncomingCustomFields(
+      'campaign',
+      { custom_fields: req.body.custom_fields },
+      campaign,
+      { skip_validation: allowSkip },
+    );
+    if (result.errors.length) return error(res, result.errors.join('; '), 400);
+    campaign.custom_fields = result.custom_fields;
+    bypassed = !!result.bypassed;
+  }
   await campaign.save();
+  if (bypassed) {
+    await recordBypassAudit({
+      AuditLog, req, resource: 'Campaign', resourceId: campaign.id, incoming: campaign.custom_fields,
+    });
+  }
   return success(res, campaign, 'Updated');
+}
+
+async function getWithFieldDefs(req, res) {
+  const campaign = await Campaign.findByPk(req.params.id, {
+    include: [{ model: Group, as: 'groups', through: { attributes: ['is_active'] } }],
+  });
+  if (!campaign) return error(res, 'Campaign not found', 404);
+  const enriched = await attachDefinitionsToResponse('campaign', campaign);
+  return success(res, enriched);
 }
 
 async function remove(req, res) {
@@ -107,4 +153,7 @@ async function unassignGroup(req, res) {
   return success(res, null, 'Unassigned');
 }
 
-module.exports = { list, getOne, create, update, remove, assignGroup, unassignGroup };
+module.exports = {
+  list, getOne, create, update, remove, assignGroup, unassignGroup,
+  getWithFieldDefs,
+};

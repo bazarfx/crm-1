@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Plus, MoreHorizontal, KeyRound, UserX, UserCheck, Trash2, LogIn, FileText,
-  ChevronDown, RotateCcw, Search, Languages, LayoutGrid, List,
+  ChevronDown, RotateCcw, Search, Languages, LayoutGrid, List, Pencil,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { unwrap } from '@/lib/api';
@@ -12,6 +12,7 @@ import { useStore } from '@/store/useStore';
 import RoleGuard from '@/components/layout/RoleGuard';
 import ResetPasswordModal from '@/components/users/ResetPasswordModal';
 import CreateUserDialog from '@/components/users/CreateUserDialog';
+import EditUserDialog from '@/components/users/EditUserDialog';
 import ChangeLanguageDialog from '@/components/users/ChangeLanguageDialog';
 import { LanguageBadge, LanguageList } from '@/components/shared/LanguageBadge';
 import { labelFor, colorsFor } from '@/lib/languages';
@@ -28,6 +29,10 @@ import {
   DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import { setTokens } from '@/lib/auth';
+import { DynamicFilterBar } from '@/components/dynamic/DynamicFilterBar';
+import { useDynamicColumns } from '@/components/dynamic/DynamicColumns';
+import { DynamicCell } from '@/components/dynamic/DynamicCell';
+import { ManageFieldsButton } from '@/components/dynamic/EditableForm';
 
 // Role pill set under the Active tab. The first two get the grouped-by-
 // language layout; everything else uses the flat table.
@@ -74,7 +79,13 @@ function UsersContent() {
   const limit = 25;
   const [total, setTotal] = useState(0);
 
+  // Custom field filters (cf_* keys). Forwarded to /users so the backend can
+  // narrow by the JSONB custom_fields column.
+  const [customFilters, setCustomFilters] = useState({});
+
   const [createOpen, setCreateOpen] = useState(false);
+  // Custom-field columns + manage button live in the page header.
+  const dynUser = useDynamicColumns('user');
 
   const useGroupedView = LANGUAGE_GROUPED_ROLES.includes(rolePill) && viewMode === 'grouped';
 
@@ -85,6 +96,9 @@ function UsersContent() {
       const params = { page, limit, search };
       if (rolePill !== 'all' && rolePill !== 'others') {
         params.role = rolePill;
+      }
+      for (const k of Object.keys(customFilters)) {
+        if (customFilters[k] !== '' && customFilters[k] != null) params[k] = customFilters[k];
       }
       const res = await api.get('/users', { params });
       let list = unwrap(res) || [];
@@ -98,7 +112,7 @@ function UsersContent() {
     } finally {
       setLoadingActive(false);
     }
-  }, [page, limit, search, rolePill]);
+  }, [page, limit, search, rolePill, customFilters]);
 
   // Grouped-by-language view for tele_sales / senior. Falls back to the flat
   // list if /users/by-language isn't available (so the page still works on a
@@ -151,11 +165,15 @@ function UsersContent() {
             Manage user accounts, roles, and access
           </p>
         </div>
-        {isAdminOrAbove && (
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1.5" /> New user
-          </Button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <dynUser.PickerButton />
+          <ManageFieldsButton entityType="user" size="sm" />
+          {isAdminOrAbove && (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-3.5 w-3.5 mr-1.5" /> New user
+            </Button>
+          )}
+        </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -214,6 +232,13 @@ function UsersContent() {
                 className="pl-9"
               />
             </div>
+
+            <DynamicFilterBar
+              entityType="user"
+              filters={customFilters}
+              onChange={(next) => { setPage(1); setCustomFilters(next); }}
+            />
+
 
             {LANGUAGE_GROUPED_ROLES.includes(rolePill) && (
               <div className="ml-auto flex items-center gap-0.5 border rounded-md p-0.5">
@@ -290,15 +315,25 @@ function UsersContent() {
                         <th className="text-left p-3 font-medium text-muted-foreground">Role</th>
                         <th className="text-left p-3 font-medium text-muted-foreground">Languages</th>
                         <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
+                        {/* Dynamic custom-field columns the user toggled on
+                            in the Columns picker. Inserted before the 3-dot
+                            menu so the row's actions stay at the right edge. */}
+                        {dynUser.customDefs
+                          .filter((d) => dynUser.visibleColumns[d.field_key])
+                          .map((d) => (
+                            <th key={d.field_key} className="text-left p-3 font-medium text-muted-foreground">
+                              {d.label}
+                            </th>
+                          ))}
                         <th className="p-3 w-10" />
                       </tr>
                     </thead>
                     <tbody>
                       {loadingActive && (
-                        <tr><td colSpan={5} className="p-8 text-center text-muted-foreground">Loading…</td></tr>
+                        <tr><td colSpan={5 + dynUser.cfColumnDefs.length} className="p-8 text-center text-muted-foreground">Loading…</td></tr>
                       )}
                       {!loadingActive && users.length === 0 && (
-                        <tr><td colSpan={5} className="p-8 text-center text-muted-foreground">No users found</td></tr>
+                        <tr><td colSpan={5 + dynUser.cfColumnDefs.length} className="p-8 text-center text-muted-foreground">No users found</td></tr>
                       )}
                       {users.map((u) => (
                         <UserRow
@@ -309,6 +344,7 @@ function UsersContent() {
                           onChange={refresh}
                           onImpersonate={(data) => doImpersonate(data, setUser)}
                           router={router}
+                          dynColumns={dynUser}
                         />
                       ))}
                     </tbody>
@@ -504,9 +540,10 @@ function GroupedUsersView({
 /* ──────────────────────────────────────────────────────────────────
  * Single user row — status quick-toggle + 3-dot actions menu
  * ────────────────────────────────────────────────────────────────── */
-function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, router, variant }) {
+function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, router, variant, dynColumns }) {
   const [resetOpen, setResetOpen] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const isSelf = user.id === currentUser?.id;
   const isSuperAdminRow = user.role === 'super_admin';
@@ -611,6 +648,16 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
         </DropdownMenu>
       </td>
 
+      {/* Dynamic custom-field columns — only render in the flat view
+          (dynColumns is undefined in the grouped variant). */}
+      {dynColumns && dynColumns.customDefs
+        .filter((d) => dynColumns.visibleColumns[d.field_key])
+        .map((d) => (
+          <td key={d.field_key} className="p-3">
+            <DynamicCell definition={d} value={user.custom_fields?.[d.field_key]} />
+          </td>
+        ))}
+
       {/* 3-dot menu */}
       <td className="p-3 text-right">
         <DropdownMenu>
@@ -623,6 +670,11 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
             <DropdownMenuLabel>{user.first_name} {user.last_name}</DropdownMenuLabel>
             <DropdownMenuSeparator />
 
+            {isAdminOrAbove && !isSuperAdminRow && (
+              <DropdownMenuItem onClick={() => setEditOpen(true)}>
+                <Pencil className="h-3.5 w-3.5 mr-2 text-blue-600 dark:text-blue-400" /> Edit
+              </DropdownMenuItem>
+            )}
             {isAdminOrAbove && !isSuperAdminRow && !isSelf && user.is_active && (
               <DropdownMenuItem onClick={deactivate} className="text-amber-600 dark:text-amber-400">
                 <UserX className="h-3.5 w-3.5 mr-2" /> Deactivate
@@ -669,6 +721,13 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
           onOpenChange={setLangOpen}
           user={user}
           onChanged={onChange}
+        />
+        <EditUserDialog
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          user={user}
+          currentUserRole={currentUser?.role}
+          onSaved={onChange}
         />
       </td>
     </tr>

@@ -6,6 +6,7 @@ const { allowRoles, STAFF_ADMIN } = require('../middleware/roleGuard');
 router.use(verifyToken);
 
 router.get('/', allowRoles(...STAFF_ADMIN, 'senior', 'auditor', 'back_office'), ctl.list);
+router.get('/:id/with-fields', allowRoles(...STAFF_ADMIN, 'senior', 'auditor', 'back_office'), ctl.getWithFieldDefs);
 router.get('/:id', allowRoles(...STAFF_ADMIN, 'senior', 'auditor', 'back_office'), ctl.getOne);
 router.post('/', allowRoles(...STAFF_ADMIN), ctl.create);
 router.patch('/:id', allowRoles(...STAFF_ADMIN), ctl.update);

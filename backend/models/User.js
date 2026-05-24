@@ -5,6 +5,7 @@ const { sequelize } = require('../config/database');
 const ROLES = [
   'super_admin',
   'admin',
+  'schema_editor',
   'floor_manager',
   'senior',
   'tele_sales',
@@ -80,6 +81,12 @@ User.init(
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: false,
+    },
+    custom_fields: {
+      type: DataTypes.JSONB,
+      defaultValue: {},
+      allowNull: false,
+      comment: 'Dynamic custom fields, structure defined by FieldDefinition registry',
     },
   },
   {
