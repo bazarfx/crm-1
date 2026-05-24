@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { useTheme } from 'next-themes';
 import {
@@ -9,15 +10,30 @@ import {
 } from 'recharts';
 import {
   Users, PhoneCall, Wallet, UserCheck, Briefcase,
-  Activity, Award, BarChart3,
+  Activity, Award, BarChart3, Calendar, Plus, Megaphone, UserCog, Webhook,
+  Languages,
 } from 'lucide-react';
+import dayjs from 'dayjs';
 import api, { unwrap } from '@/lib/api';
 import { useAuth } from '@/hooks/useAuth';
 import StatCard from '@/components/shared/StatCard';
 import StatusBadge from '@/components/shared/StatusBadge';
+import { LanguageBadge } from '@/components/shared/LanguageBadge';
+import { labelFor } from '@/lib/languages';
 import TelesellerDashboard from '@/components/dashboard/TelesellerDashboard';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import ReassignedAwayBanner from '@/components/dashboard/ReassignedAwayBanner';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { CHART_COLORS, statusColor } from '@/lib/charts';
+import { cn } from '@/lib/utils';
+
+const fmtINR = (n) => {
+  const v = Number(n || 0);
+  if (v >= 10000000) return '₹' + (v / 10000000).toFixed(1) + 'Cr';
+  if (v >= 100000) return '₹' + (v / 100000).toFixed(1) + 'L';
+  if (v >= 1000) return '₹' + (v / 1000).toFixed(1) + 'k';
+  return '₹' + v;
+};
 
 const container = {
   hidden: {},
@@ -32,6 +48,7 @@ export default function DashboardPage() {
   const { role, roleLabel, user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState(null);
+  const [dealStats, setDealStats] = useState(null);
   const [err, setErr] = useState(null);
 
   useEffect(() => {
@@ -51,6 +68,29 @@ export default function DashboardPage() {
     })();
     return () => { alive = false; };
   }, []);
+
+  // Deals KPI — same dataset as /deals, isolated so a failure here doesn't
+  // blank the rest of the dashboard.
+  useEffect(() => {
+    let alive = true;
+    api.get('/deals/stats')
+      .then((res) => { if (alive) setDealStats(unwrap(res) || null); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  // Language teams stats — only admin / super_admin see the card, so only
+  // fetch for those roles. Silently degrades if /users/language-stats isn't
+  // available (e.g. backend still rolling out the endpoint).
+  const [langStats, setLangStats] = useState(null);
+  useEffect(() => {
+    if (role !== 'admin' && role !== 'super_admin') { setLangStats(null); return; }
+    let alive = true;
+    api.get('/users/language-stats')
+      .then((res) => { if (alive) setLangStats(unwrap(res) || null); })
+      .catch(() => { if (alive) setLangStats(null); });
+    return () => { alive = false; };
+  }, [role]);
 
   const s = summary?.stats || {};
   const pipeline = (summary?.pipeline || []).map((p) => ({
@@ -74,10 +114,10 @@ export default function DashboardPage() {
     return (
       <motion.div variants={container} initial="hidden" animate="show" className="space-y-5">
         <motion.div variants={item}>
-          <h2 className="text-xl font-semibold tracking-tight">{greeting}.</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Signed in as <span className="text-foreground font-medium">{roleLabel}</span>.
-          </p>
+          <DashboardHeader greeting={greeting} roleLabel={roleLabel} role={role} err={null} />
+        </motion.div>
+        <motion.div variants={item}>
+          <ReassignedAwayBanner />
         </motion.div>
         <TelesellerDashboard />
       </motion.div>
@@ -86,14 +126,16 @@ export default function DashboardPage() {
 
   return (
     <motion.div variants={container} initial="hidden" animate="show" className="space-y-6">
-      {/* Greeting */}
+      {/* Header — greeting + date pulse + role-aware quick actions */}
       <motion.div variants={item}>
-        <h2 className="text-xl font-semibold tracking-tight">{greeting}.</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Signed in as <span className="text-foreground font-medium">{roleLabel}</span>.
-          {err && <span className="ml-2 text-amber-600 dark:text-amber-400">{err}</span>}
-        </p>
+        <DashboardHeader greeting={greeting} roleLabel={roleLabel} role={role} err={err} />
       </motion.div>
+
+      {role === 'senior' && (
+        <motion.div variants={item}>
+          <ReassignedAwayBanner />
+        </motion.div>
+      )}
 
       {(role === 'floor_manager' || role === 'senior') && (
         <ManagerDashboard
@@ -101,6 +143,7 @@ export default function DashboardPage() {
           stats={s}
           pipeline={pipeline}
           languages={languages}
+          dealStats={dealStats}
         />
       )}
 
@@ -113,6 +156,8 @@ export default function DashboardPage() {
           trend={trend}
           topCampaigns={topCampaigns}
           languages={languages}
+          dealStats={dealStats}
+          langStats={langStats}
         />
       )}
     </motion.div>
@@ -156,14 +201,25 @@ function useChartAxis() {
 /* ============================================================
  * MANAGER (floor_manager / senior)
  * ============================================================ */
-function ManagerDashboard({ loading, stats, pipeline, languages }) {
+function ManagerDashboard({ loading, stats, pipeline, languages, dealStats }) {
   const { grid, axis } = useChartAxis();
   return (
     <>
-      <motion.div variants={item} className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <motion.div variants={item} className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="Team Leads Today" value={stats.team_leads_today ?? '—'} icon={Users}     accentColor="indigo"  loading={loading} />
         <StatCard title="Team Calls"       value={stats.team_calls ?? '—'}       icon={PhoneCall} accentColor="blue"    loading={loading} />
         <StatCard title="Team FTDs"        value={stats.team_ftds ?? '—'}        icon={Wallet}    accentColor="emerald" loading={loading} />
+        <Link href="/deals" className="block">
+          <StatCard
+            title="Deals"
+            value={dealStats?.total ?? '—'}
+            icon={Award}
+            accentColor="green"
+            loading={dealStats === null && loading}
+            change={dealStats ? fmtINR(dealStats.totalDeposits) : undefined}
+            changeType="up"
+          />
+        </Link>
       </motion.div>
 
       <motion.div variants={item} className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -208,11 +264,14 @@ function ManagerDashboard({ loading, stats, pipeline, languages }) {
 /* ============================================================
  * ADMIN / SUPER_ADMIN / BACK_OFFICE / AUDITOR
  * ============================================================ */
-function AdminDashboard({ loading, stats, pipeline, sources, trend, topCampaigns, languages }) {
+function AdminDashboard({ loading, stats, pipeline, sources, trend, topCampaigns, languages, dealStats, langStats }) {
   const { grid, axis } = useChartAxis();
+  const dealsTrend = dealStats
+    ? `${dealStats.todayCount} today · ${fmtINR(dealStats.totalDeposits)}`
+    : undefined;
   return (
     <>
-      <motion.div variants={item} className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <motion.div variants={item} className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           title="Total Leads"
           value={stats.total_leads ?? '—'}
@@ -225,6 +284,17 @@ function AdminDashboard({ loading, stats, pipeline, sources, trend, topCampaigns
         <StatCard title="Leads Today"  value={stats.leads_today ?? '—'}  icon={Activity}  accentColor="violet"  loading={loading} />
         <StatCard title="ARK Accounts" value={stats.ark_accounts ?? '—'} icon={UserCheck} accentColor="teal"    loading={loading} />
         <StatCard title="Total FTDs"   value={stats.total_ftds ?? '—'}   icon={Wallet}    accentColor="emerald" loading={loading} />
+        <Link href="/deals" className="block group">
+          <StatCard
+            title="Deals"
+            value={dealStats?.total ?? '—'}
+            icon={Award}
+            accentColor="green"
+            loading={dealStats === null && loading}
+            change={dealsTrend}
+            changeType="up"
+          />
+        </Link>
       </motion.div>
 
       <motion.div variants={item} className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -342,7 +412,183 @@ function AdminDashboard({ loading, stats, pipeline, sources, trend, topCampaigns
           }))}
         />
       </motion.div>
+
+      {langStats?.by_language?.length > 0 && (
+        <motion.div variants={item}>
+          <LanguageTeamsCard rows={langStats.by_language} />
+        </motion.div>
+      )}
     </>
+  );
+}
+
+/* ============================================================
+ * Language teams — performance by primary language
+ * ============================================================ */
+function LanguageTeamsCard({ rows }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2">
+          <Languages className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+          Language teams
+        </CardTitle>
+        <CardDescription>Performance by primary language</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        {rows.slice(0, 8).map((row) => {
+          const teamCount = (row.telesellers ?? 0) + (row.seniors ?? 0);
+          return (
+            <div
+              key={row.language}
+              className="grid grid-cols-[140px_1fr_auto] items-center gap-3 p-2 rounded-md hover:bg-muted/40 transition-colors"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <LanguageBadge language={row.language} primary />
+                <span className="text-sm font-medium truncate">{labelFor(row.language)}</span>
+              </div>
+              <div className="grid grid-cols-4 gap-2 text-[10px] text-muted-foreground">
+                <Stat
+                  value={
+                    <>
+                      {row.telesellers ?? 0}<span className="text-[9px] text-muted-foreground ml-0.5">TS</span>
+                      <span className="text-muted-foreground mx-0.5">·</span>
+                      {row.seniors ?? 0}<span className="text-[9px] text-muted-foreground ml-0.5">SR</span>
+                    </>
+                  }
+                  label={`active team${teamCount === 1 ? '' : ''}`}
+                />
+                <Stat value={(row.total_leads ?? 0).toLocaleString('en-IN')} label="leads" />
+                <Stat
+                  value={(row.ftd_count ?? 0).toLocaleString('en-IN')}
+                  label="FTDs"
+                  valueClass="text-emerald-600 dark:text-emerald-400"
+                />
+                <Stat
+                  value={`₹${((row.total_deposits ?? 0) / 1000).toFixed(0)}k`}
+                  label="deposited"
+                />
+              </div>
+              {row.overflow_helpers > 0 ? (
+                <Badge variant="outline" className="text-[9px] text-amber-600 dark:text-amber-400 border-amber-500/30 whitespace-nowrap">
+                  +{row.overflow_helpers} overflow
+                </Badge>
+              ) : <span />}
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Stat({ value, label, valueClass }) {
+  return (
+    <div className="min-w-0">
+      <p className={cn('text-foreground text-xs font-medium tabular-nums truncate', valueClass)}>
+        {value}
+      </p>
+      <p className="text-[10px] text-muted-foreground truncate">{label}</p>
+    </div>
+  );
+}
+
+/* ============================================================
+ * Header — greeting, today's date pulse strip, quick actions
+ * ============================================================ */
+const QUICK_ACTIONS_BY_ROLE = {
+  super_admin: [
+    { href: '/leads',        label: 'Open leads',     icon: Users },
+    { href: '/users',        label: 'Add user',       icon: UserCog,   accent: true },
+    { href: '/campaigns',    label: 'Campaigns',      icon: Megaphone },
+    { href: '/ark-logs',     label: 'ARK logs',       icon: Webhook },
+  ],
+  admin: [
+    { href: '/leads',        label: 'Open leads',     icon: Users },
+    { href: '/users',        label: 'Add user',       icon: UserCog,   accent: true },
+    { href: '/campaigns',    label: 'Campaigns',      icon: Megaphone },
+    { href: '/reports',      label: 'Reports',        icon: BarChart3 },
+  ],
+  floor_manager: [
+    { href: '/leads',        label: 'Open leads',     icon: Users,     accent: true },
+    { href: '/groups',       label: 'Manage groups',  icon: UserCog },
+    { href: '/campaigns',    label: 'Campaigns',      icon: Megaphone },
+    { href: '/reports',      label: 'Reports',        icon: BarChart3 },
+  ],
+  senior: [
+    { href: '/leads',        label: 'Team leads',     icon: Users,     accent: true },
+    { href: '/deals',        label: 'Deals',          icon: Award },
+    { href: '/reports',      label: 'Reports',        icon: BarChart3 },
+  ],
+  tele_sales: [
+    { href: '/leads',        label: 'My leads',       icon: Users,     accent: true },
+    { href: '/deals',        label: 'My deals',       icon: Award },
+  ],
+  back_office: [
+    { href: '/leads',        label: 'Browse leads',   icon: Users },
+    { href: '/deals',        label: 'Deals',          icon: Award },
+    { href: '/reports',      label: 'Reports',        icon: BarChart3 },
+  ],
+  auditor: [
+    { href: '/leads',        label: 'Browse leads',   icon: Users },
+    { href: '/reports',      label: 'Reports',        icon: BarChart3 },
+  ],
+  archive: [
+    { href: '/leads',        label: 'Archived leads', icon: Users },
+  ],
+};
+
+function DashboardHeader({ greeting, roleLabel, role, err }) {
+  const now = dayjs();
+  const actions = QUICK_ACTIONS_BY_ROLE[role] || [];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight leading-tight">
+            {greeting}.
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Signed in as <span className="text-foreground font-medium">{roleLabel}</span>.
+            {err && <span className="ml-2 text-amber-600 dark:text-amber-400">{err}</span>}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md border bg-card text-muted-foreground">
+            <Calendar size={12} />
+            <span className="font-medium text-foreground">{now.format('dddd')}</span>
+            <span className="opacity-50">·</span>
+            <span className="mono tabular-nums">{now.format('DD MMM YYYY')}</span>
+          </div>
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-60" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+            </span>
+            <span className="font-medium">Live</span>
+          </div>
+        </div>
+      </div>
+
+      {actions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {actions.map((a) => (
+            <Link
+              key={a.href + a.label}
+              href={a.href}
+              className={a.accent
+                ? 'inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors'
+                : 'inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border bg-card text-foreground hover:bg-muted transition-colors'
+              }
+            >
+              <a.icon size={13} />
+              {a.label}
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

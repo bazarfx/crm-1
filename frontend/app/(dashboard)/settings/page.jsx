@@ -206,7 +206,7 @@ function SettingRow({ setting, saving, isSuperAdmin, onChange }) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="skip">Skip duplicate</SelectItem>
-            <SelectItem value="reassign_to_owner">Reassign to original owner</SelectItem>
+            <SelectItem value="reassign_to_owner">Reassign to original assignee</SelectItem>
             <SelectItem value="create_new">Create new lead</SelectItem>
           </SelectContent>
         </Select>

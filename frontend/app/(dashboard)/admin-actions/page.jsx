@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Eye, RefreshCw } from 'lucide-react';
+import { Eye, RefreshCw, X } from 'lucide-react';
 import api, { unwrap } from '@/lib/api';
 import RoleGuard from '@/components/layout/RoleGuard';
 import { cn } from '@/lib/utils';
@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select';
 
 const ACTION_LABELS = {
+  ASSIGN_LEAD:              { label: 'Lead reassigned',       color: 'amber' },
   REASSIGN_LEAD:            { label: 'Lead reassigned',       color: 'amber' },
   CHANGE_LEAD_STATUS:       { label: 'Status changed',         color: 'blue' },
   DEACTIVATE_USER:          { label: 'User deactivated',       color: 'red' },
@@ -81,13 +82,14 @@ function AdminActionsContent() {
   }, [filter.resource, filter.action, filter.admin_id]);
 
   const renderDiff = (log) => {
-    if (log.action === 'REASSIGN_LEAD') {
-      const newOwner = log.new_data?.lead_owner_id;
+    if (log.action === 'ASSIGN_LEAD' || log.action === 'REASSIGN_LEAD') {
+      const newAssignee =
+        log.new_data?.assigned_to_id || log.new_data?.lead_owner_id;
       return (
         <span className="text-xs">
           Reassigned to{' '}
           <span className="font-mono text-muted-foreground">
-            {newOwner ? `${String(newOwner).slice(0, 8)}…` : '—'}
+            {newAssignee ? `${String(newAssignee).slice(0, 8)}…` : '—'}
           </span>
         </span>
       );
@@ -156,13 +158,14 @@ function AdminActionsContent() {
         </Button>
       </div>
 
-      {/* Filters */}
-      <div className="flex gap-2 flex-wrap">
+      {/* Filters — grouped row matching the rest of the app: equal-height
+          pickers in a single bordered bar, clear action right-anchored. */}
+      <div className="rounded-xl border bg-card p-2.5 flex flex-wrap items-center gap-2">
         <Select
           value={filter.resource || 'all'}
           onValueChange={(v) => setFilter({ ...filter, resource: v === 'all' ? '' : v })}
         >
-          <SelectTrigger className="w-44">
+          <SelectTrigger className="w-44 h-9 text-sm">
             <SelectValue placeholder="All resources" />
           </SelectTrigger>
           <SelectContent>
@@ -180,7 +183,7 @@ function AdminActionsContent() {
           value={filter.action || 'all'}
           onValueChange={(v) => setFilter({ ...filter, action: v === 'all' ? '' : v })}
         >
-          <SelectTrigger className="w-52">
+          <SelectTrigger className="w-52 h-9 text-sm">
             <SelectValue placeholder="All actions" />
           </SelectTrigger>
           <SelectContent>
@@ -192,13 +195,19 @@ function AdminActionsContent() {
         </Select>
 
         {filter.admin_id && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setFilter({ ...filter, admin_id: '' })}
-          >
-            Clear user filter
-          </Button>
+          <div className="ml-auto inline-flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Focused on user
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 text-xs text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
+              onClick={() => setFilter({ ...filter, admin_id: '' })}
+            >
+              <X className="h-3.5 w-3.5 mr-1" /> Clear
+            </Button>
+          </div>
         )}
       </div>
 

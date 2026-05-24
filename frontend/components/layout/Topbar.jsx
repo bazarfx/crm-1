@@ -2,29 +2,41 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Menu, LogOut, ChevronDown, Bell, Search, Command } from 'lucide-react';
+import { Menu, LogOut, ChevronDown, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
+import CommandPalette from '@/components/layout/CommandPalette';
 
-const TITLES = {
-  '/dashboard': 'Dashboard',
-  '/leads': 'Leads',
-  '/users': 'Users',
-  '/groups': 'Groups',
-  '/campaigns': 'Campaigns',
-  '/reports': 'Reports',
-  '/ark-logs': 'ARK Webhook Logs',
-  '/settings': 'Settings',
-};
+// Page-title map. Each entry is [path-prefix, title, optional subtitle]. Order
+// matters — the longest-matching prefix wins so `/leads/[id]` is "Lead detail"
+// rather than the generic "Leads".
+const PAGE_TITLES = [
+  ['/leads/',         'Lead detail',       'Edit, log calls, and update status'],
+  ['/leads',          'Leads',             'Manage your pipeline'],
+  ['/dashboard',      'Dashboard',         null],
+  ['/deals',          'Deals',             'FTD-closed leads'],
+  ['/deal-requests',  'Undo requests',     'Review reversal requests'],
+  ['/users',          'Users',             'Staff and role management'],
+  ['/groups',         'Groups',            'Round-robin assignment teams'],
+  ['/campaigns',      'Campaigns',         null],
+  ['/routing',        'Routing',           'Inbound lead distribution rules'],
+  ['/reports',        'Reports',           null],
+  ['/sales-activity', 'Sales activity',    'Every save by telesellers and seniors'],
+  ['/admin-actions',  'Admin actions',     'Audit trail for admin role'],
+  ['/ark-logs',       'ARK webhook logs',  null],
+  ['/trial-leads',    'Trial leads',       null],
+  ['/permissions',    'Permissions',       'Role-based access matrix'],
+  ['/settings',       'Settings',          null],
+];
 
-function pageTitle(pathname) {
-  if (!pathname) return 'CRM 1';
-  if (pathname.startsWith('/leads/')) return 'Lead Detail';
-  const match = Object.keys(TITLES).find((k) => pathname === k || pathname.startsWith(k + '/'));
-  return match ? TITLES[match] : 'CRM 1';
+function pageMeta(pathname) {
+  if (!pathname) return { title: 'CRM 1', subtitle: null };
+  const match = PAGE_TITLES.find(([p]) => pathname === p || pathname.startsWith(p));
+  if (!match) return { title: 'CRM 1', subtitle: null };
+  return { title: match[1], subtitle: match[2] };
 }
 
 const ROLE_PILL = {
@@ -43,6 +55,7 @@ export default function Topbar({ onMenu }) {
   const pathname = usePathname();
   const { user, role, roleLabel, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -51,6 +64,19 @@ export default function Topbar({ onMenu }) {
     };
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+
+  // Cmd/Ctrl+K → open palette. Bound globally so the shortcut works from any
+  // page; the palette itself owns ESC to close so we don't double-handle.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   const onLogout = async () => {
@@ -64,6 +90,7 @@ export default function Topbar({ onMenu }) {
   const displayName = user?.first_name
     ? `${user.first_name} ${user.last_name || ''}`.trim()
     : (user?.name || user?.email || 'Guest');
+  const { title, subtitle } = pageMeta(pathname);
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4 lg:px-6">
@@ -77,23 +104,49 @@ export default function Topbar({ onMenu }) {
         <Menu className="h-4 w-4" />
       </Button>
 
-      <h1 className="text-sm font-semibold tracking-tight">
-        {pageTitle(pathname)}
-      </h1>
+      {/* Page title block: stronger hierarchy than the previous single-line
+          h1, and the subtitle (when set) gives the user the "you are here"
+          context without making them read the breadcrumb. */}
+      <div className="min-w-0">
+        <h1 className="text-[15px] font-semibold tracking-tight leading-tight truncate">
+          {title}
+        </h1>
+        {subtitle && (
+          <p className="text-[11px] text-muted-foreground leading-tight truncate">
+            {subtitle}
+          </p>
+        )}
+      </div>
 
-      {/* Search hint — Cmd+K */}
-      <Button
-        variant="outline"
-        className="ml-auto hidden md:flex h-8 gap-2 w-56 justify-start text-xs text-muted-foreground font-normal"
-      >
-        <Search className="h-3 w-3" />
-        Search leads, users…
-        <kbd className="ml-auto pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium">
-          <Command className="h-2.5 w-2.5" />K
-        </kbd>
-      </Button>
+      <div className="ml-auto flex items-center gap-1.5">
+        {/* Command palette trigger — clickable hint that mirrors the ⌘K shortcut.
+            Sized like a search input on lg+ so it reads as a global search, but
+            collapses to an icon button on small screens. */}
+        <button
+          type="button"
+          onClick={() => setPaletteOpen(true)}
+          className={cn(
+            'hidden md:inline-flex items-center gap-2 h-8 px-2.5 rounded-md border bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors text-xs',
+            'min-w-[200px]'
+          )}
+          aria-label="Open command palette"
+        >
+          <Search className="h-3.5 w-3.5" />
+          <span className="flex-1 text-left">Search pages, leads…</span>
+          <kbd className="font-mono text-[10px] border rounded px-1 py-0.5 leading-none bg-background/60">
+            ⌘K
+          </kbd>
+        </button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="md:hidden h-8 w-8"
+          onClick={() => setPaletteOpen(true)}
+          aria-label="Search"
+        >
+          <Search className="h-4 w-4" />
+        </Button>
 
-      <div className="ml-auto md:ml-0 flex items-center gap-1.5">
         {role && (
           <span
             className={cn(
@@ -108,16 +161,6 @@ export default function Topbar({ onMenu }) {
 
         <ThemeToggle />
 
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 relative"
-          aria-label="Notifications"
-        >
-          <Bell className="h-4 w-4" />
-          <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-blue-500" />
-        </Button>
-
         <div ref={menuRef} className="relative">
           <Button
             variant="ghost"
@@ -128,8 +171,8 @@ export default function Topbar({ onMenu }) {
               {initials}
             </div>
             <div className="hidden lg:block text-left">
-              <p className="text-xs font-medium leading-tight max-w-[120px] truncate">{displayName}</p>
-              <p className="font-mono text-[9px] text-muted-foreground leading-tight truncate max-w-[120px]">
+              <p className="text-xs font-medium leading-tight max-w-[140px] truncate">{displayName}</p>
+              <p className="text-[10px] text-muted-foreground leading-tight truncate max-w-[140px]">
                 {user?.email}
               </p>
             </div>
@@ -137,7 +180,11 @@ export default function Topbar({ onMenu }) {
           </Button>
 
           {menuOpen && (
-            <div className="absolute right-0 mt-2 w-48 bg-popover border rounded-lg shadow-md animate-modalIn overflow-hidden z-50">
+            <div className="absolute right-0 mt-2 w-56 bg-popover border rounded-lg shadow-md animate-modalIn overflow-hidden z-50">
+              <div className="px-3 py-2.5 border-b">
+                <p className="text-xs font-medium truncate">{displayName}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{user?.email || ''}</p>
+              </div>
               <button
                 onClick={onLogout}
                 className="w-full text-left text-sm px-3 py-2.5 flex items-center gap-2 hover:bg-muted text-foreground hover:text-red-600 dark:hover:text-red-400 transition-colors duration-150"
@@ -148,6 +195,8 @@ export default function Topbar({ onMenu }) {
           )}
         </div>
       </div>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </header>
   );
 }

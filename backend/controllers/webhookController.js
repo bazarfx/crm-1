@@ -1,6 +1,7 @@
 const { sequelize, Lead, LeadActivity, ArkWebhookLog, User } = require('../models');
 const { success, error } = require('../utils/responseHelper');
 const { verifyArkWebhook, clientIp } = require('../utils/webhookVerifier');
+const { buildCloserSnapshot } = require('../utils/dealAttribution');
 
 function detectEventType(payload) {
   const direct = payload?.event_type || payload?.event || payload?.type;
@@ -76,6 +77,14 @@ async function ark(req, res) {
       if (depAmt !== null) updates.deposited_amount = depAmt;
       updates.deposited_time = depTime ? new Date(depTime) : new Date();
       updates.lead_status = 'ftd_done';
+
+      // Snapshot the closer (current assignee) if not already set. ARK is
+      // automated — no human actor — so we have no fallback if the lead is
+      // unassigned at close time; closer just stays null.
+      if (!lead.closed_by_user_id) {
+        const snap = await buildCloserSnapshot({ lead, updates, actorUser: null });
+        Object.assign(updates, snap);
+      }
     }
     for (const k of Object.keys(updates)) {
       if (updates[k] !== undefined && updates[k] !== null) lead[k] = updates[k];

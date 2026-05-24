@@ -63,7 +63,7 @@ async function tellerPerformance(req, res) {
   const rows = await Lead.findAll({
     where,
     attributes: [
-      'lead_owner_id',
+      'assigned_to_id',
       [fn('COUNT', col('Lead.id')), 'leads_assigned'],
       [fn('SUM', literal(`CASE WHEN lead_status = 'account_opened' THEN 1 ELSE 0 END`)), 'accounts_opened'],
       [fn('SUM', literal(`CASE WHEN lead_status = 'ftd_done' THEN 1 ELSE 0 END`)), 'ftds'],
@@ -72,13 +72,13 @@ async function tellerPerformance(req, res) {
     include: [
       {
         model: User,
-        as: 'owner',
+        as: 'assignedTo',
         attributes: ['id', 'first_name', 'last_name', 'email', 'role'],
         where: { role: 'tele_sales' },
         required: true,
       },
     ],
-    group: ['lead_owner_id', 'owner.id'],
+    group: ['assigned_to_id', 'assignedTo.id'],
     order: [[literal('ftds'), 'DESC']],
     raw: false,
   });
@@ -206,7 +206,7 @@ async function dashboardSummary(req, res) {
 
   // ───── TELE SALES — own scope only ─────
   if (isTeleSales) {
-    const ownWhere = { lead_owner_id: userId };
+    const ownWhere = { assigned_to_id: userId };
 
     const [myLeads, myCallsToday, myFtds, pipelineRows, lastLeads] = await Promise.all([
       Lead.count({ where: ownWhere }),
@@ -376,13 +376,13 @@ async function ftdReport(req, res) {
     if (date_to) range[Op.lte] = new Date(date_to);
     where.ftd_at = { ...range, [Op.ne]: null };
   }
-  if (user_id) where.lead_owner_id = user_id;
+  if (user_id) where.assigned_to_id = user_id;
   if (group_id) where.group_id = group_id;
 
   const leads = await Lead.findAll({
     where,
     include: [
-      { model: User, as: 'owner', attributes: ['first_name', 'last_name'] },
+      { model: User, as: 'assignedTo', attributes: ['first_name', 'last_name'] },
       { model: Campaign, as: 'campaign', attributes: ['name'] },
     ],
     order: [['ftd_at', 'DESC']],
@@ -420,7 +420,7 @@ async function ftdReport(req, res) {
       ftd_at: l.ftd_at,
       deposited_amount: l.deposited_amount,
       ark_account_number: l.ark_account_number,
-      owner_name: l.owner ? `${l.owner.first_name} ${l.owner.last_name}` : null,
+      assignee_name: l.assignedTo ? `${l.assignedTo.first_name} ${l.assignedTo.last_name}` : null,
       campaign_name: l.campaign?.name,
       language: l.language,
       days_to_ftd: daysBetween(l.created_at, l.ftd_at),
@@ -467,7 +467,7 @@ async function arkConversion(req, res) {
     Lead.count({ where: { ark_account_number: { [Op.ne]: null }, ftd_at: null } }),
     Lead.findAll({
       where: { ftd_at: { [Op.ne]: null }, account_opened_at: { [Op.ne]: null } },
-      attributes: ['account_opened_at', 'ftd_at', 'deposited_amount', 'lead_owner_id'],
+      attributes: ['account_opened_at', 'ftd_at', 'deposited_amount', 'assigned_to_id'],
       raw: true,
     }),
   ]);
@@ -491,19 +491,19 @@ async function arkConversion(req, res) {
 
   const converters = {};
   ftdLeads.forEach((l) => {
-    if (!l.lead_owner_id) return;
-    if (!converters[l.lead_owner_id]) converters[l.lead_owner_id] = { count: 0, amount: 0 };
-    converters[l.lead_owner_id].count++;
-    converters[l.lead_owner_id].amount += Number(l.deposited_amount || 0);
+    if (!l.assigned_to_id) return;
+    if (!converters[l.assigned_to_id]) converters[l.assigned_to_id] = { count: 0, amount: 0 };
+    converters[l.assigned_to_id].count++;
+    converters[l.assigned_to_id].amount += Number(l.deposited_amount || 0);
   });
-  const ownerIds = Object.keys(converters);
-  const owners = ownerIds.length
+  const assigneeIds = Object.keys(converters);
+  const assignees = assigneeIds.length
     ? await User.findAll({
-        where: { id: { [Op.in]: ownerIds } },
+        where: { id: { [Op.in]: assigneeIds } },
         attributes: ['id', 'first_name', 'last_name'],
       })
     : [];
-  const topConverters = owners
+  const topConverters = assignees
     .map((u) => ({
       name: `${u.first_name} ${u.last_name}`,
       ftd_count: converters[u.id].count,
@@ -573,7 +573,7 @@ async function myDashboard(req, res) {
   startOfWeek.setDate(startOfDay.getDate() - startOfDay.getDay());
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const ownLeadWhere = { lead_owner_id: userId };
+  const ownLeadWhere = { assigned_to_id: userId };
 
   const [
     totalLeads,
@@ -700,24 +700,24 @@ async function getMyGroupStats(userId) {
     if (memberIds.length === 0) continue;
 
     const [totalLeads, ftdLeads, accountsOpened] = await Promise.all([
-      Lead.count({ where: { lead_owner_id: { [Op.in]: memberIds } } }),
+      Lead.count({ where: { assigned_to_id: { [Op.in]: memberIds } } }),
       Lead.count({
-        where: { lead_owner_id: { [Op.in]: memberIds }, ftd_at: { [Op.ne]: null } },
+        where: { assigned_to_id: { [Op.in]: memberIds }, ftd_at: { [Op.ne]: null } },
       }),
       Lead.count({
-        where: { lead_owner_id: { [Op.in]: memberIds }, ark_account_number: { [Op.ne]: null } },
+        where: { assigned_to_id: { [Op.in]: memberIds }, ark_account_number: { [Op.ne]: null } },
       }),
     ]);
 
     const topRows = await Lead.findAll({
-      where: { lead_owner_id: { [Op.in]: memberIds } },
-      attributes: ['lead_owner_id', [fn('COUNT', col('id')), 'lead_count']],
-      group: ['lead_owner_id'],
+      where: { assigned_to_id: { [Op.in]: memberIds } },
+      attributes: ['assigned_to_id', [fn('COUNT', col('id')), 'lead_count']],
+      group: ['assigned_to_id'],
       order: [[literal('lead_count'), 'DESC']],
       limit: 3,
       raw: true,
     });
-    const topUserIds = topRows.map((r) => r.lead_owner_id).filter(Boolean);
+    const topUserIds = topRows.map((r) => r.assigned_to_id).filter(Boolean);
     const topUsers = topUserIds.length
       ? await User.findAll({
           where: { id: { [Op.in]: topUserIds } },
@@ -727,7 +727,7 @@ async function getMyGroupStats(userId) {
       : [];
     const userMap = Object.fromEntries(topUsers.map((u) => [u.id, u]));
     const topPerformers = topRows.map((r) => {
-      const u = userMap[r.lead_owner_id];
+      const u = userMap[r.assigned_to_id];
       return {
         name: u ? `${u.first_name} ${u.last_name}` : '—',
         leads: Number(r.lead_count),

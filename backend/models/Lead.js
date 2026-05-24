@@ -79,6 +79,24 @@ Lead.init(
     deposited_amount: { type: DataTypes.DECIMAL(15, 2), allowNull: true },
     deposited_time: { type: DataTypes.DATE, allowNull: true },
 
+    // ───── DEAL ATTRIBUTION ─────
+    // Snapshotted at the moment the lead becomes a deal (status → ftd_done OR
+    // ftd_at gets set, whichever fires first). Frozen against later reassignment
+    // or user deletion so analytics always attribute the close to the actual
+    // teleseller who made it happen.
+    closed_by_user_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: { model: 'users', key: 'id' },
+      comment: 'User who closed the deal (snapshot at FTD time, immutable)',
+    },
+    closed_by_name: {
+      type: DataTypes.STRING(128),
+      allowNull: true,
+      comment: 'Denormalized full name — survives user delete/rename',
+    },
+    closed_at: { type: DataTypes.DATE, allowNull: true },
+
     // ───── CAMPAIGN (denormalized snapshot at ingest) ─────
     campaign_name: { type: DataTypes.STRING(255), allowNull: true },
     ad_set_name: { type: DataTypes.STRING(255), allowNull: true },
@@ -107,12 +125,20 @@ Lead.init(
     ark_raw: { type: DataTypes.JSONB, allowNull: true },
 
     // ───── FOREIGN KEYS ─────
-    lead_owner_id: {
+    // Lead is ASSIGNED to a user (teleseller or senior). Leads are company
+    // property — they are not "owned" by the user they're assigned to.
+    assigned_to_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: { model: 'users', key: 'id' },
+      comment: 'The teleseller or senior this lead is currently assigned to',
+    },
+    previous_assigned_to_id: {
       type: DataTypes.UUID,
       allowNull: true,
       references: { model: 'users', key: 'id' },
     },
-    previous_lead_owner_id: {
+    deleted_by: {
       type: DataTypes.UUID,
       allowNull: true,
       references: { model: 'users', key: 'id' },
@@ -138,7 +164,8 @@ Lead.init(
       { fields: ['ark_username'] },
       { fields: ['facebook_lead_id'], unique: true },
       { fields: ['lead_status'] },
-      { fields: ['lead_owner_id'] },
+      { fields: ['assigned_to_id'] },
+      { fields: ['closed_by_user_id'] },
       { fields: ['language', 'lead_status'] },
       { fields: ['campaign_id', 'lead_status'] },
       { fields: ['group_id'] },

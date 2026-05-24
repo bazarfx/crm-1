@@ -312,7 +312,7 @@ async function seedLeads(users, groups, campaigns) {
       cold_date: status === 'cold' ? createdAt : null,
       is_reactive: status === 'reactive',
       source_raw: { campaign: campaign.name, ad: campaign.ad_name, lang_code: LANG_CODES[lang] },
-      lead_owner_id: owner?.id || null,
+      assigned_to_id: owner?.id || null,
       group_id: group?.id || null,
       campaign_id: campaign.id,
       created_at: createdAt,
@@ -329,7 +329,7 @@ async function seedActivities(leads, users) {
   console.log('▶ Seeding LeadActivities (~1500) ...');
   const activities = [];
   for (const lead of leads) {
-    const owner = users.find((u) => u.id === lead.lead_owner_id);
+    const owner = users.find((u) => u.id === lead.assigned_to_id);
     if (!owner) continue;
     const count = faker.number.int({ min: 1, max: 5 });
     for (let i = 0; i < count; i++) {
@@ -408,7 +408,7 @@ async function seedIngestLogs(leads) {
     phone: l.phone,
     matched_lead_id: l.id,
     status: 'created',
-    assigned_to_user_id: l.lead_owner_id,
+    assigned_to_user_id: l.assigned_to_id,
     assigned_to_group_id: l.group_id,
     ip_address: faker.internet.ipv4(),
   }));

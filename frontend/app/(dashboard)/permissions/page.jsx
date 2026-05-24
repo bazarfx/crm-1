@@ -303,7 +303,7 @@ function PermissionsContent() {
                                     <span className="text-emerald-600 dark:text-emerald-400">All</span>
                                   </SelectItem>
                                   <SelectItem value="own">
-                                    <span className="text-amber-600 dark:text-amber-400">Own only</span>
+                                    <span className="text-amber-600 dark:text-amber-400">Assigned only</span>
                                   </SelectItem>
                                   <SelectItem value="group">
                                     <span className="text-blue-600 dark:text-blue-400">Group</span>
@@ -335,7 +335,7 @@ function PermissionsContent() {
               <span className="h-2 w-2 rounded-full bg-emerald-500" /> All — full access
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-amber-500" /> Own — only their assigned records
+              <span className="h-2 w-2 rounded-full bg-amber-500" /> Assigned — only records assigned to them
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-blue-500" /> Group — within their group(s)

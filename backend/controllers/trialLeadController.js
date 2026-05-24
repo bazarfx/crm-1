@@ -5,9 +5,8 @@ const {
   Group,
   Campaign,
   LeadActivity,
-  CampaignGroupAssignment,
 } = require('../models');
-const { assignLeadRoundRobin } = require('../utils/roundRobin');
+const { autoAssignLead } = require('../utils/leadAutoAssign');
 const { success, error } = require('../utils/responseHelper');
 
 const TRIAL_PASSWORD = null;
@@ -17,43 +16,13 @@ async function list(req, res) {
   const leads = await Lead.findAll({
     where: { is_trial: true },
     include: [
-      { model: User, as: 'owner', attributes: ['id', 'first_name', 'last_name', 'native_language'] },
+      { model: User, as: 'assignedTo', attributes: ['id', 'first_name', 'last_name', 'primary_language', 'additional_languages'] },
       { model: Group, as: 'group', attributes: ['id', 'name', 'language'] },
       { model: Campaign, as: 'campaign', attributes: ['id', 'name'] },
     ],
     order: [['created_at', 'DESC']],
   });
   return success(res, leads);
-}
-
-// Resolve a target group for assignment.
-// Preference order:
-//   1. explicit group_id from body
-//   2. group linked to campaign via CampaignGroupAssignment (matching language if given)
-//   3. any active telesales group with matching language
-async function resolveGroupId({ group_id, campaign_id, language }) {
-  if (group_id) return group_id;
-
-  if (campaign_id) {
-    const assignment = await CampaignGroupAssignment.findOne({
-      where: { campaign_id, is_active: true },
-      include: [{ model: Group, where: { is_active: true }, required: true }],
-    });
-    if (assignment?.Group) {
-      if (!language || assignment.Group.language === language) {
-        return assignment.Group.id;
-      }
-    }
-  }
-
-  if (language) {
-    const grp = await Group.findOne({
-      where: { language, is_active: true, type: 'telesales' },
-    });
-    if (grp) return grp.id;
-  }
-
-  return null;
 }
 
 function makeFakeLeadPayload({ language, lead_status, trial_label, trial_scenario, idx }) {
@@ -80,7 +49,10 @@ function makeFakeLeadPayload({ language, lead_status, trial_label, trial_scenari
   };
 }
 
-// POST /api/v1/trial-leads — create one trial lead
+// POST /api/v1/trial-leads — create one trial lead.
+// Auto-assign via round robin is MANDATORY now — every lead entering the
+// system must land on a teleseller. The legacy `auto_assign` flag is
+// ignored (kept for back-compat with older clients that still send it).
 async function create(req, res) {
   const {
     language,
@@ -89,49 +61,46 @@ async function create(req, res) {
     trial_label,
     trial_scenario,
     lead_status,
-    auto_assign,
   } = req.body || {};
 
   const leadData = makeFakeLeadPayload({ language, lead_status, trial_label, trial_scenario });
 
-  // Auto-assign via round robin if requested
-  if (auto_assign) {
-    const targetGroupId = await resolveGroupId({ group_id, campaign_id, language });
-    if (targetGroupId) {
-      try {
-        const rr = await assignLeadRoundRobin(targetGroupId, campaign_id || null);
-        leadData.lead_owner_id = rr.user.id;
-        leadData.group_id = targetGroupId;
-        leadData.campaign_id = campaign_id || null;
-        if (campaign_id) {
-          const camp = await Campaign.findByPk(campaign_id);
-          leadData.campaign_name = camp?.name || null;
-        }
-      } catch (e) {
-        console.warn('[trial] auto-assign failed:', e.message);
-      }
-    }
-  } else if (group_id) {
-    leadData.group_id = group_id;
-    if (campaign_id) leadData.campaign_id = campaign_id;
+  let assignment = null;
+  try {
+    assignment = await autoAssignLead({
+      lead_source: leadData.lead_source || 'facebook_ads',
+      language,
+      campaign_id,
+      group_id,
+    });
+    leadData.assigned_to_id = assignment.assigned_to_id;
+    leadData.group_id = assignment.group_id;
+    leadData.campaign_id = assignment.campaign_id;
+    if (assignment.campaign_name) leadData.campaign_name = assignment.campaign_name;
+  } catch (e) {
+    // If we genuinely can't assign (no telesales groups exist, no active
+    // members anywhere), surface it instead of silently creating an orphan
+    // lead — the operator can fix the group config and retry.
+    return error(res, `Cannot create trial lead — ${e.message}`, 503);
   }
 
   const lead = await Lead.create(leadData);
 
-  if (lead.lead_owner_id) {
-    await LeadActivity.create({
-      lead_id: lead.id,
-      user_id: lead.lead_owner_id,
-      activity_type: 'assignment',
-      title: '[TRIAL] Lead assigned',
-      description: `Trial lead auto-assigned via round robin. Scenario: ${trial_scenario || 'general_demo'}`,
-    });
-  }
+  await LeadActivity.create({
+    lead_id: lead.id,
+    user_id: lead.assigned_to_id,
+    activity_type: 'assignment',
+    title: '[TRIAL] Lead auto-assigned',
+    description: `Trial lead routed via round robin (${assignment.reason}). Scenario: ${trial_scenario || 'general_demo'}.`,
+  });
 
-  return success(res, lead, 'Trial lead created', 201);
+  return success(res, lead, 'Trial lead created and assigned', 201);
 }
 
-// POST /api/v1/trial-leads/batch — create multiple trial leads at once (for demo)
+// POST /api/v1/trial-leads/batch — create multiple trial leads at once.
+// Each slot runs RR independently so the rotation actually advances across
+// the batch (otherwise every lead would go to the same agent). Auto-assign
+// is mandatory.
 async function createBatch(req, res) {
   const {
     count = 5,
@@ -139,16 +108,11 @@ async function createBatch(req, res) {
     campaign_id,
     group_id,
     trial_scenario,
-    auto_assign = true,
   } = req.body || {};
   const max = Math.min(Number(count) || 5, 20);
 
   const created = [];
   const assignmentLog = [];
-
-  const targetGroupId = auto_assign
-    ? await resolveGroupId({ group_id, campaign_id, language })
-    : group_id || null;
 
   for (let i = 0; i < max; i++) {
     const leadData = makeFakeLeadPayload({
@@ -158,44 +122,48 @@ async function createBatch(req, res) {
       idx: i,
     });
 
-    if (auto_assign && targetGroupId) {
-      try {
-        const rr = await assignLeadRoundRobin(targetGroupId, campaign_id || null);
-        leadData.lead_owner_id = rr.user.id;
-        leadData.group_id = targetGroupId;
-        leadData.campaign_id = campaign_id || null;
-        assignmentLog.push({
-          slot: i + 1,
-          assigned_to: `${rr.user.first_name} ${rr.user.last_name}`,
-          language: rr.user.native_language,
-          rr_index: rr.state.current_index,
-        });
-      } catch (e) {
-        console.warn(`[trial batch] slot ${i} failed:`, e.message);
-        assignmentLog.push({ slot: i + 1, error: e.message });
-      }
-    } else if (targetGroupId) {
-      leadData.group_id = targetGroupId;
-      if (campaign_id) leadData.campaign_id = campaign_id;
-    }
+    try {
+      const assignment = await autoAssignLead({
+        lead_source: leadData.lead_source || 'facebook_ads',
+        language,
+        campaign_id,
+        group_id,
+      });
+      leadData.assigned_to_id = assignment.assigned_to_id;
+      leadData.group_id = assignment.group_id;
+      leadData.campaign_id = assignment.campaign_id;
+      if (assignment.campaign_name) leadData.campaign_name = assignment.campaign_name;
 
-    const lead = await Lead.create(leadData);
-    if (lead.lead_owner_id) {
+      const lead = await Lead.create(leadData);
       await LeadActivity.create({
         lead_id: lead.id,
-        user_id: lead.lead_owner_id,
+        user_id: lead.assigned_to_id,
         activity_type: 'assignment',
-        title: '[TRIAL] Batch assigned',
-        description: `Batch trial lead. Round robin position ${i + 1} of ${max}.`,
+        title: '[TRIAL] Batch auto-assigned',
+        description: `Batch slot ${i + 1}/${max} routed via round robin (${assignment.reason}).`,
       });
+
+      assignmentLog.push({
+        slot: i + 1,
+        assigned_to: `${assignment.assignee.first_name} ${assignment.assignee.last_name}`,
+        language: assignment.assignee.primary_language,
+        group: assignment.group?.name,
+        reason: assignment.reason,
+      });
+      created.push(lead);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(`[trial batch] slot ${i} failed:`, e.message);
+      assignmentLog.push({ slot: i + 1, error: e.message });
+      // Don't break the whole batch — let later slots try; if none succeed
+      // the caller sees an empty `leads` array and the per-slot errors.
     }
-    created.push(lead);
   }
 
   return success(res, {
     leads: created,
     assignment_log: assignmentLog,
-    message: `${created.length} trial leads created${auto_assign ? ' and assigned via round robin' : ''}`,
+    message: `${created.length} trial leads created and assigned via round robin`,
   });
 }
 

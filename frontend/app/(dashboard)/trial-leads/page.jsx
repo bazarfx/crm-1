@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import api, { unwrap } from '@/lib/api';
 import RoleGuard from '@/components/layout/RoleGuard';
 import StatusBadge from '@/components/shared/StatusBadge';
+import { LanguageList } from '@/components/shared/LanguageBadge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -274,14 +275,16 @@ function TrialLeadsContent() {
                       </Badge>
                     </td>
                     <td className="p-3">
-                      {lead.owner ? (
-                        <div>
+                      {lead.assignedTo ? (
+                        <div className="flex flex-col gap-1">
                           <p className="font-medium">
-                            {lead.owner.first_name} {lead.owner.last_name}
+                            {lead.assignedTo.first_name} {lead.assignedTo.last_name}
                           </p>
-                          <p className="text-muted-foreground capitalize">
-                            {lead.owner.native_language}
-                          </p>
+                          <LanguageList
+                            primary={lead.assignedTo.primary_language}
+                            additional={lead.assignedTo.additional_languages}
+                            size="xs"
+                          />
                         </div>
                       ) : (
                         <span className="text-muted-foreground">Unassigned</span>

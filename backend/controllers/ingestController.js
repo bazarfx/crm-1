@@ -5,13 +5,12 @@ const {
   LeadActivity,
   Campaign,
   Group,
-  CampaignGroupAssignment,
   IngestLog,
   Setting,
 } = require('../models');
 const { success, error } = require('../utils/responseHelper');
 const { verifyIngestToken, clientIp } = require('../utils/webhookVerifier');
-const { assignLeadRoundRobin } = require('../utils/roundRobin');
+const { routeLead } = require('../services/leadRouter');
 
 // Small TTL cache so we don't hit Settings on every ingest call.
 const SETTING_TTL_MS = 30 * 1000;
@@ -136,36 +135,29 @@ async function ingest(req, res) {
   // Derive language from campaign if not in payload
   const language = data.language || campaign?.language || null;
 
-  // Find group: prefer campaign assignment; fallback by language
-  let group = null;
-  if (campaign) {
-    const assignment = await CampaignGroupAssignment.findOne({
-      where: { campaign_id: campaign.id, is_active: true },
-      include: [{ model: Group, where: { is_active: true, type: 'telesales' }, required: true }],
-    });
-    group = assignment?.Group || null;
-  }
-  if (!group && language) {
-    group = await Group.findOne({
-      where: { language, is_active: true, type: 'telesales' },
-    });
-  }
-
-  // Read assignment settings (cached).
-  const [modeSetting] = await Promise.all([
-    getSetting('assignment.mode', { mode: 'round_robin' }),
-  ]);
-  const assignmentMode = modeSetting?.mode || 'round_robin';
+  // Routing is now centralized in services/leadRouter.routeLead — it walks
+  // admin-configured RoutingRules for (facebook_ads, language), then falls
+  // back to language groups → language telesellers → any teleseller. The
+  // legacy `assignment.mode = manual` setting is intentionally ignored:
+  // every lead entering the system must land on an agent.
+  let routerResult = null;
+  let routerError = null;
 
   const tx = await sequelize.transaction();
   try {
-    let ownerId = null;
-    let groupId = group?.id || null;
-    if (group && assignmentMode !== 'manual') {
-      const rr = await assignLeadRoundRobin(group.id, campaign?.id || null, { transaction: tx });
-      ownerId = rr.user.id;
+    try {
+      routerResult = await routeLead({
+        lead_source: 'facebook_ads',
+        language,
+        campaign_id: campaign?.id || null,
+        transaction: tx,
+      });
+    } catch (e) {
+      routerError = e;
     }
-    // manual mode: leave ownerId null — lead sits in unassigned pool for admin pickup.
+
+    const ownerId = routerResult?.assignee?.id || null;
+    const groupId = routerResult?.group_id || null;
 
     const lead = await Lead.create(
       {
@@ -185,7 +177,7 @@ async function ingest(req, res) {
         ad_platform: data.ad_platform,
         facebook_lead_id: data.facebook_lead_id,
         source_raw: payload,
-        lead_owner_id: ownerId,
+        assigned_to_id: ownerId,
         group_id: groupId,
         campaign_id: campaign?.id || null,
       },
@@ -198,12 +190,15 @@ async function ingest(req, res) {
         user_id: ownerId || (await getSystemUserId()),
         activity_type: 'assignment',
         title: ownerId
-          ? 'Assigned via round robin'
-          : assignmentMode === 'manual'
-            ? 'Created (manual mode — awaiting admin assignment)'
-            : 'Created (unassigned — no matching group)',
+          ? `Assigned via ${routerResult?.reason || 'round robin'}`
+          : `Unassigned — ${routerError?.message || 'router returned no target'}`,
         new_value: ownerId || null,
-        metadata: { campaign_id: campaign?.id, group_id: groupId },
+        metadata: {
+          campaign_id: campaign?.id,
+          group_id: groupId,
+          router_reason: routerResult?.reason || null,
+          router_error: routerError?.message || null,
+        },
       },
       { transaction: tx },
     );
@@ -226,7 +221,7 @@ async function ingest(req, res) {
     await tx.commit();
     return success(
       res,
-      { lead_id: lead.id, owner_id: ownerId, group_id: groupId, campaign_id: campaign?.id || null },
+      { lead_id: lead.id, assigned_to_id: ownerId, group_id: groupId, campaign_id: campaign?.id || null },
       'Lead ingested',
       201,
     );

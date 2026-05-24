@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Users, UserCog, Building2, Megaphone,
-  BarChart3, Webhook, Settings, X, TrendingUp, LogOut, FlaskConical, Shield, Eye,
+  BarChart3, Webhook, Settings, X, TrendingUp, LogOut, FlaskConical, Shield, Eye, Award, Undo2, Activity, Route,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -16,20 +16,48 @@ import { Separator } from '@/components/ui/separator';
 
 const ADMIN = ['super_admin', 'admin'];
 const FM_UP = ['super_admin', 'admin', 'floor_manager'];
+const ALL = ['super_admin','admin','floor_manager','senior','tele_sales','back_office','auditor','archive'];
 
-const NAV = [
-  { href: '/dashboard',  label: 'Dashboard',  icon: LayoutDashboard, roles: ['super_admin','admin','floor_manager','senior','tele_sales','back_office','auditor','archive'] },
-  { href: '/leads',      label: 'My Leads',   icon: Users,           roles: ['tele_sales'] },
-  { href: '/leads',      label: 'Leads',      icon: Users,           roles: ['super_admin','admin','floor_manager','senior','back_office','auditor','archive'] },
-  { href: '/users',      label: 'Users',      icon: UserCog,         roles: ADMIN },
-  { href: '/groups',     label: 'Groups',     icon: Building2,       roles: FM_UP },
-  { href: '/campaigns',  label: 'Campaigns',  icon: Megaphone,       roles: FM_UP },
-  { href: '/reports',    label: 'Reports',    icon: BarChart3,       roles: ['super_admin','admin','floor_manager','senior'] },
-  { href: '/ark-logs',   label: 'ARK Logs',   icon: Webhook,         roles: ADMIN },
-  { href: '/trial-leads',label: 'Trial Leads',icon: FlaskConical,    roles: ['super_admin'] },
-  { href: '/permissions',label: 'Permissions',icon: Shield,          roles: ['super_admin'] },
-  { href: '/admin-actions',label:'Admin Actions',icon: Eye,           roles: ['super_admin'] },
-  { href: '/settings',   label: 'Settings',   icon: Settings,        roles: ADMIN },
+// Sidebar nav is grouped into semantic sections so a super_admin with 15
+// links isn't staring at a wall of icons. Each group renders a small label
+// header; groups with zero visible items collapse so the role-filtered view
+// stays clean.
+const NAV_GROUPS = [
+  {
+    label: 'Workspace',
+    items: [
+      { href: '/dashboard',     label: 'Dashboard',  icon: LayoutDashboard, roles: ALL },
+      { href: '/leads',         label: 'My Leads',   icon: Users,           roles: ['tele_sales'] },
+      { href: '/leads',         label: 'Leads',      icon: Users,           roles: ['super_admin','admin','floor_manager','senior','back_office','auditor','archive'] },
+      { href: '/deals',         label: 'Deals',      icon: Award,           roles: ['super_admin','admin','floor_manager','senior','tele_sales','back_office','auditor'] },
+      { href: '/deal-requests', label: 'Undo Requests', icon: Undo2,        roles: ['super_admin','admin','floor_manager','senior','tele_sales'] },
+    ],
+  },
+  {
+    label: 'Manage',
+    items: [
+      { href: '/users',     label: 'Users',     icon: UserCog,   roles: ADMIN },
+      { href: '/groups',    label: 'Groups',    icon: Building2, roles: FM_UP },
+      { href: '/campaigns', label: 'Campaigns', icon: Megaphone, roles: FM_UP },
+      { href: '/routing',   label: 'Routing',   icon: Route,     roles: ADMIN },
+    ],
+  },
+  {
+    label: 'Insights',
+    items: [
+      { href: '/reports',        label: 'Reports',       icon: BarChart3, roles: ['super_admin','admin','floor_manager','senior'] },
+      { href: '/activity-logs',  label: 'Activity Log',  icon: Activity,  roles: ADMIN },
+      { href: '/ark-logs',       label: 'ARK Logs',      icon: Webhook,   roles: ADMIN },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { href: '/permissions', label: 'Permissions', icon: Shield,        roles: ['super_admin'] },
+      { href: '/trial-leads', label: 'Trial Leads', icon: FlaskConical,  roles: ['super_admin'] },
+      { href: '/settings',    label: 'Settings',    icon: Settings,      roles: ADMIN },
+    ],
+  },
 ];
 
 const ROLE_COLORS = {
@@ -47,7 +75,12 @@ export default function Sidebar({ open, onClose }) {
   const pathname = usePathname();
   const router = useRouter();
   const { role, roleLabel, user, logout } = useAuth();
-  const items = NAV.filter((i) => !role || i.roles.includes(role));
+
+  // Apply role filter to every group, then drop empty groups so a teleseller
+  // doesn't see a "Manage" header with nothing under it.
+  const groups = NAV_GROUPS
+    .map((g) => ({ ...g, items: g.items.filter((i) => !role || i.roles.includes(role)) }))
+    .filter((g) => g.items.length > 0);
 
   const onLogout = async () => {
     await logout();
@@ -114,42 +147,51 @@ export default function Sidebar({ open, onClose }) {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto p-2">
-          <p className="px-3 pt-2 pb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-white/30">
-            Workspace
-          </p>
-          <ul className="space-y-0.5">
-            {items.map((item) => {
-              const Icon = item.icon;
-              const active = pathname === item.href || pathname?.startsWith(item.href + '/');
-              return (
-                <li key={`${item.href}-${item.label}`}>
-                  <Link href={item.href} onClick={onClose}>
-                    <motion.div
-                      whileHover={{ x: 2 }}
-                      whileTap={{ scale: 0.98 }}
-                      className={cn(
-                        'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-150 relative',
-                        active
-                          ? 'bg-blue-500/15 text-blue-400 border border-blue-500/20'
-                          : 'text-white/50 hover:text-white/90 hover:bg-white/[0.05] border border-transparent'
-                      )}
-                    >
-                      <Icon size={16} strokeWidth={2} className={cn('flex-shrink-0', active && 'text-blue-400')} />
-                      <span>{item.label}</span>
-                      {active && (
-                        <motion.span
-                          layoutId="sidebar-active-dot"
-                          className="ml-auto h-1.5 w-1.5 rounded-full bg-blue-400"
-                          transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                        />
-                      )}
-                    </motion.div>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+        <nav className="flex-1 overflow-y-auto p-2 space-y-3">
+          {groups.map((group, gi) => (
+            <div key={group.label}>
+              <p
+                className={cn(
+                  'px-3 pb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-white/30',
+                  gi === 0 ? 'pt-2' : 'pt-3',
+                )}
+              >
+                {group.label}
+              </p>
+              <ul className="space-y-0.5">
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const active = pathname === item.href || pathname?.startsWith(item.href + '/');
+                  return (
+                    <li key={`${item.href}-${item.label}`}>
+                      <Link href={item.href} onClick={onClose}>
+                        <motion.div
+                          whileHover={{ x: 2 }}
+                          whileTap={{ scale: 0.98 }}
+                          className={cn(
+                            'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-150 relative',
+                            active
+                              ? 'bg-blue-500/15 text-blue-400 border border-blue-500/20'
+                              : 'text-white/50 hover:text-white/90 hover:bg-white/[0.05] border border-transparent'
+                          )}
+                        >
+                          <Icon size={16} strokeWidth={2} className={cn('flex-shrink-0', active && 'text-blue-400')} />
+                          <span>{item.label}</span>
+                          {active && (
+                            <motion.span
+                              layoutId="sidebar-active-dot"
+                              className="ml-auto h-1.5 w-1.5 rounded-full bg-blue-400"
+                              transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                            />
+                          )}
+                        </motion.div>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
         </nav>
 
         <Separator className="bg-white/[0.06]" />

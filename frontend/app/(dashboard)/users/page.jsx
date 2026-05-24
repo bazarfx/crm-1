@@ -1,45 +1,47 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Plus, MoreHorizontal, KeyRound, UserX, UserCheck, Trash2, LogIn, FileText,
-  ChevronDown, RotateCcw, Search,
+  ChevronDown, RotateCcw, Search, Languages, LayoutGrid, List,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { unwrap } from '@/lib/api';
 import { useStore } from '@/store/useStore';
 import RoleGuard from '@/components/layout/RoleGuard';
 import ResetPasswordModal from '@/components/users/ResetPasswordModal';
+import CreateUserDialog from '@/components/users/CreateUserDialog';
+import ChangeLanguageDialog from '@/components/users/ChangeLanguageDialog';
+import { LanguageBadge, LanguageList } from '@/components/shared/LanguageBadge';
+import { labelFor, colorsFor } from '@/lib/languages';
 import { cn } from '@/lib/utils';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import {
   Tabs, TabsList, TabsTrigger, TabsContent,
 } from '@/components/ui/tabs';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
-} from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
   DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import { setTokens } from '@/lib/auth';
 
-const ROLE_OPTIONS = [
-  { value: 'tele_sales',    label: 'Tele Sales' },
-  { value: 'senior',        label: 'Senior' },
-  { value: 'floor_manager', label: 'Floor Manager' },
-  { value: 'admin',         label: 'Admin' },
-  { value: 'auditor',       label: 'Auditor' },
-  { value: 'back_office',   label: 'Back Office' },
+// Role pill set under the Active tab. The first two get the grouped-by-
+// language layout; everything else uses the flat table.
+const ROLE_PILLS = [
+  { value: 'all',           label: 'All' },
+  { value: 'tele_sales',    label: 'Telesellers' },
+  { value: 'senior',        label: 'Seniors' },
+  { value: 'floor_manager', label: 'Floor managers' },
+  { value: 'others',        label: 'Others' },
 ];
+
+const OTHERS_ROLES = ['back_office', 'auditor', 'admin', 'super_admin', 'archive'];
+
+const LANGUAGE_GROUPED_ROLES = ['tele_sales', 'senior'];
 
 export default function UsersPage() {
   return (
@@ -57,10 +59,16 @@ function UsersContent() {
     currentUser?.role === 'super_admin' || currentUser?.role === 'admin';
 
   const [activeTab, setActiveTab] = useState('active');
+  const [rolePill, setRolePill] = useState('all');
+  const [viewMode, setViewMode] = useState('grouped'); // grouped | flat
+  const [selectedLanguage, setSelectedLanguage] = useState('all');
+
   const [users, setUsers] = useState([]);
+  const [byLanguage, setByLanguage] = useState(null);
   const [deletedUsers, setDeletedUsers] = useState([]);
   const [loadingActive, setLoadingActive] = useState(true);
   const [loadingDeleted, setLoadingDeleted] = useState(true);
+
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const limit = 25;
@@ -68,18 +76,45 @@ function UsersContent() {
 
   const [createOpen, setCreateOpen] = useState(false);
 
+  const useGroupedView = LANGUAGE_GROUPED_ROLES.includes(rolePill) && viewMode === 'grouped';
+
+  // Active-users list (flat). Honours role filter + search + pagination.
   const loadActive = useCallback(async () => {
     setLoadingActive(true);
     try {
-      const res = await api.get('/users', { params: { page, limit, search } });
-      setUsers(unwrap(res) || []);
-      setTotal(res?.data?.pagination?.total || 0);
+      const params = { page, limit, search };
+      if (rolePill !== 'all' && rolePill !== 'others') {
+        params.role = rolePill;
+      }
+      const res = await api.get('/users', { params });
+      let list = unwrap(res) || [];
+      if (rolePill === 'others') {
+        list = list.filter((u) => OTHERS_ROLES.includes(u.role));
+      }
+      setUsers(list);
+      setTotal(res?.data?.pagination?.total || list.length);
     } catch (e) {
       toast.error(e?.response?.data?.message || 'Failed to load users');
     } finally {
       setLoadingActive(false);
     }
-  }, [page, limit, search]);
+  }, [page, limit, search, rolePill]);
+
+  // Grouped-by-language view for tele_sales / senior. Falls back to the flat
+  // list if /users/by-language isn't available (so the page still works on a
+  // backend without the new endpoint).
+  const loadByLanguage = useCallback(async () => {
+    if (!LANGUAGE_GROUPED_ROLES.includes(rolePill)) {
+      setByLanguage(null);
+      return;
+    }
+    try {
+      const res = await api.get('/users/by-language', { params: { role: rolePill } });
+      setByLanguage(unwrap(res) || null);
+    } catch {
+      setByLanguage(null);
+    }
+  }, [rolePill]);
 
   const loadDeleted = useCallback(async () => {
     if (!isAdminOrAbove) return;
@@ -88,14 +123,24 @@ function UsersContent() {
       const res = await api.get('/users/deleted');
       setDeletedUsers(unwrap(res) || []);
     } catch {
-      // Likely a permissions denial; silent.
+      // permissions denial, silent
     } finally {
       setLoadingDeleted(false);
     }
   }, [isAdminOrAbove]);
 
   useEffect(() => { loadActive(); }, [loadActive]);
+  useEffect(() => { loadByLanguage(); }, [loadByLanguage]);
   useEffect(() => { loadDeleted(); }, [loadDeleted]);
+
+  // Reset language selection whenever the role pill changes so the user
+  // doesn't carry an obsolete language filter into a new role view.
+  useEffect(() => {
+    setSelectedLanguage('all');
+    setPage(1);
+  }, [rolePill]);
+
+  const refresh = () => { loadActive(); loadByLanguage(); loadDeleted(); };
 
   return (
     <div className="space-y-5">
@@ -135,71 +180,152 @@ function UsersContent() {
 
         {/* ── ACTIVE TAB ───────────────────────────────────────── */}
         <TabsContent value="active" className="space-y-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => { setPage(1); setSearch(e.target.value); }}
-              placeholder="Search by name or email…"
-              className="pl-9 max-w-sm"
-            />
+          {/* Role pill strip. Acts as a server-side filter for the flat list
+              and the trigger for the grouped-by-language layout. */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {ROLE_PILLS.map((p) => {
+              const active = rolePill === p.value;
+              return (
+                <button
+                  key={p.value}
+                  type="button"
+                  onClick={() => setRolePill(p.value)}
+                  className={cn(
+                    'h-8 px-3 rounded-md text-xs font-medium transition-colors',
+                    active
+                      ? 'bg-foreground text-background'
+                      : 'border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
           </div>
 
-          <Card>
-            <CardContent className="p-0 overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left p-3 font-medium text-muted-foreground">User</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Role</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Language</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
-                    <th className="p-3 w-10" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {loadingActive && (
-                    <tr><td colSpan={5} className="p-8 text-center text-muted-foreground">Loading…</td></tr>
-                  )}
-                  {!loadingActive && users.length === 0 && (
-                    <tr><td colSpan={5} className="p-8 text-center text-muted-foreground">No users found</td></tr>
-                  )}
-                  {users.map((u) => (
-                    <UserRow
-                      key={u.id}
-                      user={u}
-                      currentUser={currentUser}
-                      isAdminOrAbove={isAdminOrAbove}
-                      onChange={() => { loadActive(); loadDeleted(); }}
-                      onImpersonate={(data) => {
-                        // Stash original token so we can return later if needed
-                        try {
-                          const orig = window.localStorage.getItem('crm1-token-original');
-                          if (!orig) {
-                            const a = window.localStorage.getItem('crm1-access-token');
-                            if (a) window.localStorage.setItem('crm1-token-original', a);
-                          }
-                        } catch {}
-                        setTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
-                        setUser(data.user);
-                        window.location.href = '/dashboard';
-                      }}
-                      router={router}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </CardContent>
-          </Card>
-
-          {total > limit && (
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Showing {(page - 1) * limit + 1}–{Math.min(page * limit, total)} of {total}</span>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</Button>
-                <Button variant="outline" size="sm" disabled={page * limit >= total} onClick={() => setPage(page + 1)}>Next</Button>
-              </div>
+          {/* Search + view-mode toggle */}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative flex-1 max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => { setPage(1); setSearch(e.target.value); }}
+                placeholder="Search by name or email…"
+                className="pl-9"
+              />
             </div>
+
+            {LANGUAGE_GROUPED_ROLES.includes(rolePill) && (
+              <div className="ml-auto flex items-center gap-0.5 border rounded-md p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('grouped')}
+                  className={cn(
+                    'h-7 px-2.5 rounded text-xs font-medium inline-flex items-center gap-1.5 transition-colors',
+                    viewMode === 'grouped' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60'
+                  )}
+                  aria-pressed={viewMode === 'grouped'}
+                >
+                  <LayoutGrid className="h-3 w-3" /> Grouped
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('flat')}
+                  className={cn(
+                    'h-7 px-2.5 rounded text-xs font-medium inline-flex items-center gap-1.5 transition-colors',
+                    viewMode === 'flat' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60'
+                  )}
+                  aria-pressed={viewMode === 'flat'}
+                >
+                  <List className="h-3 w-3" /> Flat
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Language pill row — only when grouped layout is active and the
+              backend served per-language data. */}
+          {LANGUAGE_GROUPED_ROLES.includes(rolePill) && byLanguage?.groups && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-muted-foreground mr-1">Languages:</span>
+              <LanguagePill
+                label="All"
+                count={byLanguage.total_users ?? byLanguage.groups.reduce((a, g) => a + (g.count || 0), 0)}
+                active={selectedLanguage === 'all'}
+                onClick={() => setSelectedLanguage('all')}
+              />
+              {byLanguage.groups.map((g) => (
+                <LanguagePill
+                  key={g.language}
+                  language={g.language}
+                  label={labelFor(g.language)}
+                  count={g.count}
+                  active={selectedLanguage === g.language}
+                  onClick={() => setSelectedLanguage(g.language)}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Grouped view */}
+          {useGroupedView && byLanguage?.groups ? (
+            <GroupedUsersView
+              byLanguage={byLanguage}
+              selectedLanguage={selectedLanguage}
+              role={rolePill}
+              currentUser={currentUser}
+              isAdminOrAbove={isAdminOrAbove}
+              onChange={refresh}
+              onImpersonate={(data) => doImpersonate(data, setUser)}
+              router={router}
+            />
+          ) : (
+            <>
+              <Card>
+                <CardContent className="p-0 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left p-3 font-medium text-muted-foreground">User</th>
+                        <th className="text-left p-3 font-medium text-muted-foreground">Role</th>
+                        <th className="text-left p-3 font-medium text-muted-foreground">Languages</th>
+                        <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
+                        <th className="p-3 w-10" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loadingActive && (
+                        <tr><td colSpan={5} className="p-8 text-center text-muted-foreground">Loading…</td></tr>
+                      )}
+                      {!loadingActive && users.length === 0 && (
+                        <tr><td colSpan={5} className="p-8 text-center text-muted-foreground">No users found</td></tr>
+                      )}
+                      {users.map((u) => (
+                        <UserRow
+                          key={u.id}
+                          user={u}
+                          currentUser={currentUser}
+                          isAdminOrAbove={isAdminOrAbove}
+                          onChange={refresh}
+                          onImpersonate={(data) => doImpersonate(data, setUser)}
+                          router={router}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </CardContent>
+              </Card>
+
+              {total > limit && (
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Showing {(page - 1) * limit + 1}–{Math.min(page * limit, total)} of {total}</span>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</Button>
+                    <Button variant="outline" size="sm" disabled={page * limit >= total} onClick={() => setPage(page + 1)}>Next</Button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </TabsContent>
 
@@ -247,8 +373,7 @@ function UsersContent() {
                               try {
                                 await api.post(`/users/${u.id}/restore`);
                                 toast.success('User restored and activated');
-                                loadActive();
-                                loadDeleted();
+                                refresh();
                               } catch {
                                 toast.error('Restore failed');
                               }
@@ -267,72 +392,111 @@ function UsersContent() {
         )}
       </Tabs>
 
-      {/* ── Create user dialog ───────────────────────────────────── */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create new user</DialogTitle>
-            <DialogDescription>
-              The user will receive an account they can sign in to.
-            </DialogDescription>
-          </DialogHeader>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const fd = new FormData(e.currentTarget);
-              const body = Object.fromEntries(fd.entries());
-              try {
-                await api.post('/users', body);
-                toast.success('User created');
-                setCreateOpen(false);
-                loadActive();
-              } catch (err) {
-                toast.error(err?.response?.data?.message || 'Failed to create user');
-              }
-            }}
-            className="space-y-4 py-2"
-          >
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="first_name">First name</Label>
-                <Input id="first_name" name="first_name" required placeholder="John" />
+      <CreateUserDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={refresh}
+      />
+    </div>
+  );
+}
+
+function doImpersonate(data, setUser) {
+  try {
+    const orig = window.localStorage.getItem('crm1-token-original');
+    if (!orig) {
+      const a = window.localStorage.getItem('crm1-access-token');
+      if (a) window.localStorage.setItem('crm1-token-original', a);
+    }
+  } catch {}
+  setTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
+  setUser(data.user);
+  window.location.href = '/dashboard';
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Language pill (for the per-language filter row above grouped view)
+ * ────────────────────────────────────────────────────────────────── */
+function LanguagePill({ language, label, count, active, onClick }) {
+  const c = language ? colorsFor(language) : null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium border transition-colors',
+        active
+          ? language
+            ? cn(c.bg, c.text, 'border-current/40')
+            : 'bg-foreground text-background border-foreground'
+          : 'border-border text-muted-foreground hover:text-foreground hover:bg-muted'
+      )}
+    >
+      {label}
+      {typeof count === 'number' && (
+        <span className="font-mono tabular-nums text-[10px] opacity-70">{count}</span>
+      )}
+    </button>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Grouped-by-language view (one card per language)
+ * ────────────────────────────────────────────────────────────────── */
+function GroupedUsersView({
+  byLanguage, selectedLanguage, role, currentUser, isAdminOrAbove, onChange, onImpersonate, router,
+}) {
+  const groups = useMemo(() => {
+    return (byLanguage.groups || []).filter(
+      (g) => selectedLanguage === 'all' || g.language === selectedLanguage
+    );
+  }, [byLanguage, selectedLanguage]);
+
+  if (groups.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-10 text-center text-sm text-muted-foreground">
+          No users in this language.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const noun = role === 'tele_sales' ? 'telesellers' : 'seniors';
+
+  return (
+    <div className="space-y-4">
+      {groups.map((group) => (
+        <Card key={group.language}>
+          <CardContent className="p-0">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b bg-muted/30">
+              <div className="flex items-center gap-2">
+                <LanguageBadge language={group.language} primary />
+                <span className="text-sm font-medium">{labelFor(group.language)}</span>
+                <span className="text-xs text-muted-foreground">
+                  {group.count} {noun}
+                </span>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="last_name">Last name</Label>
-                <Input id="last_name" name="last_name" required placeholder="Doe" />
-              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" name="email" type="email" required placeholder="john@example.com" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="role">Role</Label>
-              <select
-                id="role"
-                name="role"
-                required
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                defaultValue=""
-              >
-                <option value="" disabled>Select a role</option>
-                {ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="password">Temporary password</Label>
-              <Input id="password" name="password" type="password" required minLength={6} />
-              <p className="text-[10px] text-muted-foreground">
-                User will be prompted to change it on first login.
-              </p>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-              <Button type="submit">Create user</Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+            <table className="w-full text-xs">
+              <tbody>
+                {(group.users || []).map((u) => (
+                  <UserRow
+                    key={u.id}
+                    user={u}
+                    currentUser={currentUser}
+                    isAdminOrAbove={isAdminOrAbove}
+                    onChange={onChange}
+                    onImpersonate={onImpersonate}
+                    router={router}
+                    variant="grouped"
+                  />
+                ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }
@@ -340,25 +504,28 @@ function UsersContent() {
 /* ──────────────────────────────────────────────────────────────────
  * Single user row — status quick-toggle + 3-dot actions menu
  * ────────────────────────────────────────────────────────────────── */
-function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, router }) {
+function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, router, variant }) {
   const [resetOpen, setResetOpen] = useState(false);
+  const [langOpen, setLangOpen] = useState(false);
 
   const isSelf = user.id === currentUser?.id;
   const isSuperAdminRow = user.role === 'super_admin';
   const isCurrentSuperAdmin = currentUser?.role === 'super_admin';
   const canQuickToggle = isAdminOrAbove && !isSuperAdminRow && !isSelf;
+  // Admin & super_admin can re-language tele_sales / senior. Everyone else
+  // sees the menu item hidden — including floor managers, who can move
+  // people between groups but not change the language identity itself.
+  const canChangeLanguage =
+    (currentUser?.role === 'admin' || currentUser?.role === 'super_admin') &&
+    ['tele_sales', 'senior'].includes(user.role);
 
   const deactivate = async () => {
-    if (!confirm(
-      `Deactivate ${user.first_name} ${user.last_name}? They'll be logged out within 30 seconds.`
-    )) return;
+    if (!confirm(`Deactivate ${user.first_name} ${user.last_name}? They'll be logged out within 30 seconds.`)) return;
     try {
       await api.patch(`/users/${user.id}/deactivate`);
       toast.success('User deactivated');
       onChange();
-    } catch (e) {
-      toast.error(e?.response?.data?.message || 'Failed');
-    }
+    } catch (e) { toast.error(e?.response?.data?.message || 'Failed'); }
   };
 
   const activate = async () => {
@@ -366,9 +533,7 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
       await api.patch(`/users/${user.id}/activate`);
       toast.success('User activated');
       onChange();
-    } catch (e) {
-      toast.error(e?.response?.data?.message || 'Failed');
-    }
+    } catch (e) { toast.error(e?.response?.data?.message || 'Failed'); }
   };
 
   const softDelete = async () => {
@@ -377,33 +542,40 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
       await api.delete(`/users/${user.id}`);
       toast.success('User moved to recycle bin');
       onChange();
-    } catch (e) {
-      toast.error(e?.response?.data?.message || 'Failed');
-    }
+    } catch (e) { toast.error(e?.response?.data?.message || 'Failed'); }
   };
 
   const impersonate = async () => {
-    if (!confirm(
-      `Log in as ${user.first_name} ${user.last_name}? Your current session will be replaced.`
-    )) return;
+    if (!confirm(`Log in as ${user.first_name} ${user.last_name}? Your current session will be replaced.`)) return;
     try {
       const res = await api.post(`/users/${user.id}/impersonate`);
       const payload = unwrap(res) || {};
       toast.success(`Logged in as ${payload.user?.first_name || user.first_name}`);
       onImpersonate(payload);
-    } catch (e) {
-      toast.error(e?.response?.data?.message || 'Failed to impersonate');
-    }
+    } catch (e) { toast.error(e?.response?.data?.message || 'Failed to impersonate'); }
   };
+
+  const initials = `${(user.first_name?.[0] || '').toUpperCase()}${(user.last_name?.[0] || '').toUpperCase()}` || '?';
 
   return (
     <tr className="border-b last:border-0 hover:bg-muted/20 transition-colors">
+      {variant === 'grouped' && (
+        <td className="p-3 w-10">
+          <div className="w-7 h-7 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 flex items-center justify-center text-[10px] font-medium">
+            {initials}
+          </div>
+        </td>
+      )}
       <td className="p-3">
         <p className="font-medium">{user.first_name} {user.last_name}</p>
         <p className="text-muted-foreground font-mono text-[10px]">{user.email}</p>
       </td>
-      <td className="p-3 capitalize">{user.role?.replace(/_/g, ' ')}</td>
-      <td className="p-3 capitalize text-muted-foreground">{user.native_language || '—'}</td>
+      {variant !== 'grouped' && (
+        <td className="p-3 capitalize">{user.role?.replace(/_/g, ' ')}</td>
+      )}
+      <td className="p-3">
+        <LanguageList primary={user.primary_language} additional={user.additional_languages} />
+      </td>
 
       {/* Status quick-toggle */}
       <td className="p-3">
@@ -420,12 +592,7 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
               )}
               disabled={!canQuickToggle}
             >
-              <span
-                className={cn(
-                  'h-1.5 w-1.5 rounded-full',
-                  user.is_active ? 'bg-emerald-500' : 'bg-red-500'
-                )}
-              />
+              <span className={cn('h-1.5 w-1.5 rounded-full', user.is_active ? 'bg-emerald-500' : 'bg-red-500')} />
               {user.is_active ? 'Active' : 'Inactive'}
               {canQuickToggle && <ChevronDown className="h-3 w-3" />}
             </Button>
@@ -457,18 +624,12 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
             <DropdownMenuSeparator />
 
             {isAdminOrAbove && !isSuperAdminRow && !isSelf && user.is_active && (
-              <DropdownMenuItem
-                onClick={deactivate}
-                className="text-amber-600 dark:text-amber-400"
-              >
+              <DropdownMenuItem onClick={deactivate} className="text-amber-600 dark:text-amber-400">
                 <UserX className="h-3.5 w-3.5 mr-2" /> Deactivate
               </DropdownMenuItem>
             )}
             {isAdminOrAbove && !isSuperAdminRow && !isSelf && !user.is_active && (
-              <DropdownMenuItem
-                onClick={activate}
-                className="text-emerald-600 dark:text-emerald-400"
-              >
+              <DropdownMenuItem onClick={activate} className="text-emerald-600 dark:text-emerald-400">
                 <UserCheck className="h-3.5 w-3.5 mr-2" /> Activate
               </DropdownMenuItem>
             )}
@@ -477,21 +638,24 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
                 <KeyRound className="h-3.5 w-3.5 mr-2" /> Reset password
               </DropdownMenuItem>
             )}
+            {canChangeLanguage && (
+              <DropdownMenuItem onClick={() => setLangOpen(true)}>
+                <Languages className="h-3.5 w-3.5 mr-2 text-purple-600 dark:text-purple-400" />
+                Change language
+              </DropdownMenuItem>
+            )}
             {isCurrentSuperAdmin && !isSuperAdminRow && !isSelf && (
               <DropdownMenuItem onClick={impersonate}>
                 <LogIn className="h-3.5 w-3.5 mr-2" /> Impersonate
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onClick={() => router.push(`/admin-actions?user=${user.id}`)}>
+            <DropdownMenuItem onClick={() => router.push(`/activity-logs?user=${user.id}`)}>
               <FileText className="h-3.5 w-3.5 mr-2" /> View activity
             </DropdownMenuItem>
             {isAdminOrAbove && !isSuperAdminRow && !isSelf && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={softDelete}
-                  className="text-red-600 dark:text-red-400"
-                >
+                <DropdownMenuItem onClick={softDelete} className="text-red-600 dark:text-red-400">
                   <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete user
                 </DropdownMenuItem>
               </>
@@ -500,6 +664,12 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
         </DropdownMenu>
 
         <ResetPasswordModal open={resetOpen} onOpenChange={setResetOpen} user={user} />
+        <ChangeLanguageDialog
+          open={langOpen}
+          onOpenChange={setLangOpen}
+          user={user}
+          onChanged={onChange}
+        />
       </td>
     </tr>
   );

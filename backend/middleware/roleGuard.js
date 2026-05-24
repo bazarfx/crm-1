@@ -41,7 +41,7 @@ function requirePermission(permission) {
   return async function (req, res, next) {
     try {
       if (!req.user) return error(res, 'Unauthenticated', 401);
-      const level = await getLevel(req.user.role, permission);
+      const level = await getLevel(req.user.role, permission, req.user.id);
       if (!level || level === 'none') {
         return error(res, `Permission denied: ${permission}`, 403);
       }
@@ -59,7 +59,7 @@ function requirePermission(permission) {
 function attachPermission(permission) {
   return async function (req, res, next) {
     try {
-      req.permissionLevel = req.user ? await getLevel(req.user.role, permission) : 'none';
+      req.permissionLevel = req.user ? await getLevel(req.user.role, permission, req.user.id) : 'none';
     } catch (e) {
       req.permissionLevel = 'none';
     }

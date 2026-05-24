@@ -3,7 +3,7 @@ const { sequelize } = require('../config/database');
 
 const ALL_ROLES = [
   'super_admin', 'admin', 'floor_manager', 'senior',
-  'tele_sales', 'back_office', 'auditor', 'archive',
+  'tele_sales', 'back_office', 'auditor', 'archive', 'custom',
 ];
 
 const VALID_LEVELS = ['none', 'all', 'own', 'group', 'read'];

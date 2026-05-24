@@ -15,6 +15,12 @@ router.get(
   allowRoles(...STAFF_ADMIN, 'back_office', 'auditor'),
   ctl.exportCsv,
 );
+// MUST precede `/:id` — otherwise Express matches "reassignments" as a lead id.
+router.get(
+  '/reassignments/from-me',
+  allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales'),
+  ctl.reassignmentsFromMe,
+);
 router.get(
   '/:id',
   allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales', 'back_office', 'auditor', 'archive'),
@@ -26,8 +32,30 @@ router.patch(
   allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales'),
   ctl.update,
 );
-router.delete('/:id', allowRoles('super_admin', 'admin'), ctl.remove);
+// Explicit per-action routes — admin / super_admin / floor_manager / senior / tele_sales
+router.patch(
+  '/:id/status',
+  allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales'),
+  ctl.updateStatus,
+);
+router.patch(
+  '/:id/assign',
+  allowRoles(...STAFF_ADMIN),
+  ctl.assign,
+);
+router.patch(
+  '/:id/reassign',
+  allowRoles(...STAFF_ADMIN, 'senior'),
+  ctl.reassign,
+);
+router.patch(
+  '/:id/owner',
+  allowRoles(...STAFF_ADMIN, 'senior'),
+  ctl.reassign,
+);
+router.delete('/:id', allowRoles('super_admin', 'admin'), ctl.softDelete);
 
+// Legacy / aliases — kept for back-compat with code that hasn't migrated yet
 router.post(
   '/:id/assign',
   allowRoles(...STAFF_ADMIN, 'senior'),
@@ -42,6 +70,18 @@ router.post(
   '/:id/calls',
   allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales'),
   ctl.logCall,
+);
+
+// Activity timeline
+router.get(
+  '/:id/activities',
+  allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales', 'back_office', 'auditor'),
+  ctl.getActivities,
+);
+router.post(
+  '/:id/activities',
+  allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales'),
+  ctl.addActivity,
 );
 
 module.exports = router;

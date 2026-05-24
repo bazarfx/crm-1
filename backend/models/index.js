@@ -15,6 +15,10 @@ const AuditLog = require('./AuditLog');
 const RefreshToken = require('./RefreshToken');
 const Setting = require('./Setting');
 const RolePermission = require('./RolePermission');
+const UserPermission = require('./UserPermission');
+const DealUndoRequest = require('./DealUndoRequest');
+const RoutingRule = require('./RoutingRule');
+const RRPointer = require('./RRPointer');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ASSOCIATIONS
@@ -66,11 +70,14 @@ CampaignGroupAssignment.belongsTo(Group, { foreignKey: 'group_id' });
 CampaignGroupAssignment.belongsTo(User, { as: 'assigner', foreignKey: 'assigned_by' });
 
 // Lead ↔ User / Group / Campaign
-Lead.belongsTo(User, { as: 'owner', foreignKey: 'lead_owner_id' });
-Lead.belongsTo(User, { as: 'previousOwner', foreignKey: 'previous_lead_owner_id' });
+// Lead is ASSIGNED to a user — `assignedTo` alias, NOT `owner`.
+Lead.belongsTo(User, { as: 'assignedTo', foreignKey: 'assigned_to_id' });
+Lead.belongsTo(User, { as: 'previousAssignedTo', foreignKey: 'previous_assigned_to_id' });
+Lead.belongsTo(User, { as: 'closedBy', foreignKey: 'closed_by_user_id' });
+Lead.belongsTo(User, { as: 'deletedBy', foreignKey: 'deleted_by' });
 Lead.belongsTo(Group, { as: 'group', foreignKey: 'group_id' });
 Lead.belongsTo(Campaign, { as: 'campaign', foreignKey: 'campaign_id' });
-User.hasMany(Lead, { foreignKey: 'lead_owner_id', as: 'ownedLeads' });
+User.hasMany(Lead, { foreignKey: 'assigned_to_id', as: 'assignedLeads' });
 Group.hasMany(Lead, { foreignKey: 'group_id', as: 'leads' });
 Campaign.hasMany(Lead, { foreignKey: 'campaign_id', as: 'leads' });
 
@@ -109,6 +116,24 @@ Setting.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedBy' });
 // RolePermission (audited last editor)
 RolePermission.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedBy' });
 
+// UserPermission — per-user permission overlay for role='custom' users.
+UserPermission.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+UserPermission.belongsTo(User, { foreignKey: 'updated_by', as: 'updatedBy' });
+User.hasMany(UserPermission, { foreignKey: 'user_id', as: 'permissions' });
+
+// DealUndoRequest — links to the lead being undone, the requester, and the
+// reviewer (admin/super_admin who approves or rejects).
+DealUndoRequest.belongsTo(Lead, { foreignKey: 'lead_id', as: 'lead' });
+DealUndoRequest.belongsTo(User, { foreignKey: 'requested_by_user_id', as: 'requestedBy' });
+DealUndoRequest.belongsTo(User, { foreignKey: 'reviewed_by_user_id', as: 'reviewedBy' });
+Lead.hasMany(DealUndoRequest, { foreignKey: 'lead_id', as: 'undoRequests' });
+User.hasMany(DealUndoRequest, { foreignKey: 'requested_by_user_id', as: 'undoRequestsRaised' });
+
+// RoutingRule — admin lookup convenience. target_id is polymorphic (group or
+// user) so we deliberately do NOT add a hasMany on either side; the resolver
+// fetches by target_type + target_id explicitly.
+RoutingRule.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SYNC
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,4 +162,8 @@ module.exports = {
   RefreshToken,
   Setting,
   RolePermission,
+  UserPermission,
+  DealUndoRequest,
+  RoutingRule,
+  RRPointer,
 };

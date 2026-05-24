@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { X, Filter } from 'lucide-react';
 import { useStore } from '@/store/useStore';
+import { useAuth } from '@/hooks/useAuth';
 import { statusColor } from '@/lib/charts';
 
 const EMPTY = {
@@ -12,8 +13,69 @@ const EMPTY = {
   has_ark: false, has_ftd: false,
 };
 
+// Role → which lead sources should appear in the filter drawer.
+//   tele_sales: every public-ad source, but NEVER direct_ark (those go
+//               straight to seniors and a teleseller will never own one).
+//   senior:     only direct_ark — that's the entire scope of their pipeline.
+//   everyone else: no restriction.
+//
+// `allowed === null` means "show every source from config" — used for admins
+// and read-only roles.
+const SOURCE_RULES = {
+  tele_sales:    { exclude: ['direct_ark'], only: null },
+  senior:        { exclude: [],             only: ['direct_ark'] },
+  super_admin:   { exclude: [],             only: null },
+  admin:         { exclude: [],             only: null },
+  floor_manager: { exclude: [],             only: null },
+  back_office:   { exclude: [],             only: null },
+  auditor:       { exclude: [],             only: null },
+  archive:       { exclude: [],             only: null },
+};
+
+// Build a [{ value, label, color? }] list from either grouped config rows
+// or a hardcoded fallback. Tolerates both `{key, label}` (Config table shape)
+// and `{value, label}` (already-normalized) inputs.
+function normalizeOptions(rows, fallback) {
+  if (Array.isArray(rows) && rows.length > 0) {
+    return rows
+      .filter((r) => r && (r.key || r.value))
+      .map((r) => ({
+        value: r.value ?? r.key,
+        label: r.label || r.key || r.value,
+        color: r.color || null,
+      }));
+  }
+  return fallback;
+}
+
+const STATUS_FALLBACK = [
+  { value: 'new', label: 'New' },
+  { value: 'contacted', label: 'Contacted' },
+  { value: 'interested', label: 'Interested' },
+  { value: 'not_interested', label: 'Not Interested' },
+  { value: 'call_back', label: 'Call Back' },
+  { value: 'account_opened', label: 'Account Opened' },
+  { value: 'ftd_done', label: 'FTD Done' },
+  { value: 'cold', label: 'Cold' },
+  { value: 'dnd', label: 'DND' },
+];
+
+const LANGUAGE_FALLBACK = ['English', 'Hindi', 'Tamil', 'Telugu', 'Kannada', 'Marathi', 'Gujarati']
+  .map((v) => ({ value: v.toLowerCase(), label: v }));
+
+const SOURCE_FALLBACK = [
+  { value: 'facebook_ads',  label: 'Facebook Ads' },
+  { value: 'instagram_ads', label: 'Instagram Ads' },
+  { value: 'google_ads',    label: 'Google Ads' },
+  { value: 'website',       label: 'Website' },
+  { value: 'referral',      label: 'Referral' },
+  { value: 'manual',        label: 'Manual' },
+  { value: 'direct_ark',    label: 'Direct ARK Signup' },
+];
+
 export default function FilterDrawer({ open, onClose, value, onApply, campaigns = [] }) {
   const config = useStore((s) => s.config);
+  const { user, role } = useAuth();
   const [state, setState] = useState({ ...EMPTY, ...(value || {}) });
 
   useEffect(() => { setState({ ...EMPTY, ...(value || {}) }); }, [value, open]);
@@ -26,28 +88,50 @@ export default function FilterDrawer({ open, onClose, value, onApply, campaigns 
     });
   };
 
-  const statuses = config?.statuses || config?.lead_statuses || [
-    { value: 'new', label: 'New' },
-    { value: 'contacted', label: 'Contacted' },
-    { value: 'interested', label: 'Interested' },
-    { value: 'not_interested', label: 'Not Interested' },
-    { value: 'call_back', label: 'Call Back' },
-    { value: 'account_opened', label: 'Account Opened' },
-    { value: 'ftd_done', label: 'FTD Done' },
-    { value: 'cold', label: 'Cold' },
-    { value: 'dnd', label: 'DND' },
-  ];
+  const statuses  = useMemo(() => normalizeOptions(config?.lead_status, STATUS_FALLBACK), [config]);
+  const allLanguages = useMemo(() => normalizeOptions(config?.language, LANGUAGE_FALLBACK), [config]);
+  const allSources   = useMemo(() => normalizeOptions(config?.lead_source, SOURCE_FALLBACK), [config]);
 
-  const languages = config?.languages || [
-    'English', 'Hindi', 'Tamil', 'Telugu', 'Kannada', 'Marathi', 'Gujarati',
-  ].map((v) => ({ value: v.toLowerCase(), label: v }));
+  // Restrict the source list to what makes sense for the caller's role. Apply
+  // BOTH the exclude blacklist and the optional `only` whitelist so seniors
+  // see exactly one option and never get tempted to pick a paid-ad source
+  // that they'll never actually own.
+  const sources = useMemo(() => {
+    const rule = SOURCE_RULES[role] || { exclude: [], only: null };
+    let list = allSources;
+    if (rule.only) list = list.filter((s) => rule.only.includes(s.value));
+    if (rule.exclude.length) list = list.filter((s) => !rule.exclude.includes(s.value));
+    return list;
+  }, [allSources, role]);
 
-  const sources = config?.sources || [
-    { value: 'meta', label: 'Meta Ads' },
-    { value: 'organic', label: 'Organic' },
-    { value: 'referral', label: 'Referral' },
-    { value: 'manual', label: 'Manual' },
-  ];
+  // For tele_sales / senior, their leads come in their primary language plus
+  // any additional_languages they've opted into for overflow. Collapse the
+  // filter to that union so the drawer reflects what's actually in scope.
+  const languages = useMemo(() => {
+    if (!['tele_sales', 'senior'].includes(role)) return allLanguages;
+    const primary = (user?.primary_language || '').toLowerCase();
+    if (!primary) return allLanguages;
+    const allowed = new Set([primary, ...((user?.additional_languages || []).map((l) => (l || '').toLowerCase()))]);
+    const filtered = allLanguages.filter((l) => allowed.has(l.value.toLowerCase()));
+    return filtered.length ? filtered : allLanguages;
+  }, [allLanguages, role, user?.primary_language, user?.additional_languages]);
+
+  // Same idea for campaigns: telesellers + seniors only handle leads from
+  // campaigns matching their primary or one of their additional languages.
+  // Floor managers and admins keep the full list because they triage across
+  // languages.
+  const visibleCampaigns = useMemo(() => {
+    if (!['tele_sales', 'senior'].includes(role)) return campaigns;
+    const primary = (user?.primary_language || '').toLowerCase();
+    if (!primary) return campaigns;
+    const allowed = new Set([primary, ...((user?.additional_languages || []).map((l) => (l || '').toLowerCase()))]);
+    return campaigns.filter((c) => !c.language || allowed.has(c.language.toLowerCase()));
+  }, [campaigns, role, user?.primary_language, user?.additional_languages]);
+
+  // Hide whole sections that would only ever present a single forced choice —
+  // a one-option "filter" is just noise.
+  const showLanguageSection = languages.length > 1;
+  const showSourceSection = sources.length > 1;
 
   return (
     <>
@@ -61,76 +145,87 @@ export default function FilterDrawer({ open, onClose, value, onApply, campaigns 
       />
       <aside
         className={clsx(
-          'fixed inset-y-0 right-0 w-full sm:w-80 z-50 bg-white shadow-lg flex flex-col',
+          'fixed inset-y-0 right-0 w-full sm:w-80 z-50 bg-background border-l shadow-lg flex flex-col',
           'transition-transform duration-200 ease-out',
           open ? 'translate-x-0' : 'translate-x-full'
         )}
         role="dialog"
         aria-modal="true"
       >
-        <div className="h-14 px-5 flex items-center justify-between border-b border-slate-100 shrink-0">
+        <div className="h-14 px-5 flex items-center justify-between border-b shrink-0">
           <div className="flex items-center gap-2">
-            <Filter size={14} className="text-accent" />
-            <h3 className="text-sm font-semibold text-ink-primary">Filters</h3>
+            <Filter size={14} className="text-primary" />
+            <h3 className="text-sm font-semibold text-foreground">Filters</h3>
           </div>
-          <button onClick={onClose} className="text-ink-muted hover:text-ink-primary p-1 rounded-md hover:bg-surface-alt">
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1 rounded-md hover:bg-muted transition-colors">
             <X size={16} />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-6">
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
           <Section label="Status">
-            <div className="space-y-1.5">
-              {statuses.map((s) => (
-                <Checkbox
-                  key={s.value}
-                  label={
-                    <span className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full" style={{ background: s.color || statusColor(s.value) }} />
-                      {s.label}
-                    </span>
-                  }
-                  checked={state.status.includes(s.value)}
-                  onChange={() => toggle('status', s.value)}
-                />
-              ))}
+            <div className="flex flex-wrap gap-1.5">
+              {statuses.map((s) => {
+                const active = state.status.includes(s.value);
+                const color = s.color || statusColor(s.value);
+                return (
+                  <Pill
+                    key={s.value}
+                    active={active}
+                    onClick={() => toggle('status', s.value)}
+                    accent={color}
+                  >
+                    <span
+                      className="w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{ background: color }}
+                    />
+                    {s.label}
+                  </Pill>
+                );
+              })}
             </div>
           </Section>
 
-          <Section label="Language">
-            <div className="space-y-1.5">
-              {languages.map((l) => (
-                <Checkbox
-                  key={l.value}
-                  label={l.label}
-                  checked={state.language.includes(l.value)}
-                  onChange={() => toggle('language', l.value)}
-                />
-              ))}
-            </div>
-          </Section>
+          {showLanguageSection && (
+            <Section label="Language">
+              <div className="flex flex-wrap gap-1.5">
+                {languages.map((l) => (
+                  <Pill
+                    key={l.value}
+                    active={state.language.includes(l.value)}
+                    onClick={() => toggle('language', l.value)}
+                  >
+                    {l.label}
+                  </Pill>
+                ))}
+              </div>
+            </Section>
+          )}
 
-          <Section label="Source">
-            <div className="space-y-1.5">
-              {sources.map((s) => (
-                <Checkbox
-                  key={s.value}
-                  label={s.label}
-                  checked={state.source.includes(s.value)}
-                  onChange={() => toggle('source', s.value)}
-                />
-              ))}
-            </div>
-          </Section>
+          {showSourceSection && (
+            <Section label="Source">
+              <div className="flex flex-wrap gap-1.5">
+                {sources.map((s) => (
+                  <Pill
+                    key={s.value}
+                    active={state.source.includes(s.value)}
+                    onClick={() => toggle('source', s.value)}
+                  >
+                    {s.label}
+                  </Pill>
+                ))}
+              </div>
+            </Section>
+          )}
 
           <Section label="Campaign">
             <select
               value={state.campaign}
               onChange={(e) => setState((s) => ({ ...s, campaign: e.target.value }))}
-              className="input"
+              className="w-full h-9 rounded-md border bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-shadow"
             >
               <option value="">All campaigns</option>
-              {campaigns.map((c) => (
+              {visibleCampaigns.map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
@@ -138,44 +233,52 @@ export default function FilterDrawer({ open, onClose, value, onApply, campaigns 
 
           <Section label="Date Range">
             <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-[11px] text-ink-muted">From</label>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase tracking-wide text-muted-foreground">From</label>
                 <input
                   type="date"
                   value={state.date_from}
                   onChange={(e) => setState((s) => ({ ...s, date_from: e.target.value }))}
-                  className="input text-xs"
+                  className="w-full h-9 rounded-md border bg-background px-2.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-shadow"
                 />
               </div>
-              <div>
-                <label className="text-[11px] text-ink-muted">To</label>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase tracking-wide text-muted-foreground">To</label>
                 <input
                   type="date"
                   value={state.date_to}
                   onChange={(e) => setState((s) => ({ ...s, date_to: e.target.value }))}
-                  className="input text-xs"
+                  className="w-full h-9 rounded-md border bg-background px-2.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-shadow"
                 />
               </div>
             </div>
           </Section>
 
           <Section label="ARK & FTD">
-            <Toggle label="Has ARK account" checked={state.has_ark}
-              onChange={() => setState((s) => ({ ...s, has_ark: !s.has_ark }))} />
-            <Toggle label="Has FTD" checked={state.has_ftd}
-              onChange={() => setState((s) => ({ ...s, has_ftd: !s.has_ftd }))} />
+            <div className="grid grid-cols-2 gap-2">
+              <TogglePill
+                label="Has ARK"
+                checked={state.has_ark}
+                onChange={() => setState((s) => ({ ...s, has_ark: !s.has_ark }))}
+              />
+              <TogglePill
+                label="Has FTD"
+                checked={state.has_ftd}
+                onChange={() => setState((s) => ({ ...s, has_ftd: !s.has_ftd }))}
+              />
+            </div>
           </Section>
         </div>
 
-        <div className="p-4 border-t border-slate-100 flex items-center gap-2 shrink-0">
+        <div className="p-4 border-t flex items-center gap-2 shrink-0">
           <button
-            className="btn-ghost text-sm flex-1"
+            className="inline-flex items-center justify-center flex-1 h-9 rounded-md border bg-background text-sm font-medium hover:bg-muted transition-colors"
             onClick={() => { setState(EMPTY); onApply(EMPTY); }}
           >
-            Clear All
+            Clear all
           </button>
           <button
-            className="btn-primary text-sm flex-1"
+            className="inline-flex items-center justify-center flex-1 h-9 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
             onClick={() => { onApply(state); onClose(); }}
           >
             Apply
@@ -189,46 +292,64 @@ export default function FilterDrawer({ open, onClose, value, onApply, campaigns 
 function Section({ label, children }) {
   return (
     <div>
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted mb-2">{label}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">{label}</p>
       {children}
     </div>
   );
 }
 
-function Checkbox({ label, checked, onChange }) {
+// Compact toggle chip used for multi-select filters (Status, Language, Source).
+// Replaces the old vertical checkbox column — a wrapping pill row reads as a
+// single visual block and scans much faster than a stack of labels.
+//
+// `accent` tints the active state with the status color; falls back to the
+// neutral foreground/background pair when not provided.
+function Pill({ active, onClick, children, accent }) {
+  const activeStyle = active && accent
+    ? { backgroundColor: `${accent}1A`, color: accent, borderColor: `${accent}55` }
+    : undefined;
   return (
-    <label className="flex items-center gap-2.5 cursor-pointer text-sm text-ink-secondary hover:text-ink-primary py-1 rounded-md hover:bg-surface-alt px-1.5 -mx-1.5 transition-colors duration-150">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={onChange}
-        className="w-4 h-4 rounded border-slate-300 text-accent focus:ring-accent/40 cursor-pointer"
-      />
-      <span className="flex-1">{label}</span>
-    </label>
+    <button
+      type="button"
+      onClick={onClick}
+      style={activeStyle}
+      className={clsx(
+        'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium border transition-colors duration-150 whitespace-nowrap',
+        active
+          ? (accent
+              ? '' // inline style takes over
+              : 'bg-foreground text-background border-foreground')
+          : 'border-border text-muted-foreground bg-background hover:bg-muted hover:text-foreground'
+      )}
+      aria-pressed={active}
+    >
+      {children}
+    </button>
   );
 }
 
-function Toggle({ label, checked, onChange }) {
+// Boolean toggle styled as a full-width pill — used for ARK / FTD switches.
+// Replaces the old labeled-row layout so they sit side-by-side in a 2-col grid.
+function TogglePill({ label, checked, onChange }) {
   return (
-    <label className="flex items-center justify-between py-2 cursor-pointer text-sm text-ink-secondary hover:text-ink-primary">
-      <span>{label}</span>
-      <button
-        type="button"
-        onClick={onChange}
+    <button
+      type="button"
+      onClick={onChange}
+      className={clsx(
+        'inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-md text-xs font-medium border transition-colors duration-150',
+        checked
+          ? 'bg-primary text-primary-foreground border-primary'
+          : 'border-border text-muted-foreground bg-background hover:bg-muted hover:text-foreground'
+      )}
+      aria-pressed={checked}
+    >
+      <span
         className={clsx(
-          'relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-150',
-          checked ? 'bg-accent' : 'bg-slate-200'
+          'w-1.5 h-1.5 rounded-full shrink-0',
+          checked ? 'bg-primary-foreground' : 'bg-muted-foreground/40'
         )}
-        aria-pressed={checked}
-      >
-        <span
-          className={clsx(
-            'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-150',
-            checked ? 'translate-x-4' : 'translate-x-0.5'
-          )}
-        />
-      </button>
-    </label>
+      />
+      {label}
+    </button>
   );
 }

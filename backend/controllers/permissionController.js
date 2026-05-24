@@ -8,11 +8,12 @@ const { success } = require('../utils/responseHelper');
  */
 exports.myPermissions = async (req, res) => {
   const { role, id } = req.user;
-  const permissions = await getAllForRole(role);
+  const permissions = await getAllForRole(role, id);
   return success(res, {
     role,
     user_id: id,
     permissions,
     is_super_admin: role === 'super_admin',
+    is_custom: role === 'custom',
   });
 };

@@ -1,542 +1,819 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  ArrowLeft, PhoneCall, Mail, MessageSquare, StickyNote, Activity, Zap,
-  Calendar, BanIcon, Snowflake, UserCog, Loader2, Hash, Clock, Wallet,
-  Building, MapPin, Tag, Megaphone, ChevronRight,
+  ArrowLeft, Save, Trash2, AlertCircle, Undo2, Award, Phone,
+  MessageCircle, Mail, Copy, MapPin, Globe, Briefcase, Wallet,
+  CheckCircle2, Building2, Hash, Languages, FileText, ListTree, Activity,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import toast from 'react-hot-toast';
-import clsx from 'clsx';
 import api, { unwrap } from '@/lib/api';
-import { useAuth } from '@/hooks/useAuth';
+import useStore from '@/store/useStore';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import StatusBadge from '@/components/shared/StatusBadge';
-import EmptyState from '@/components/shared/EmptyState';
-import ActivityModal from '@/components/leads/ActivityModal';
-import Modal from '@/components/shared/Modal';
-import { inrFormat, statusColor } from '@/lib/charts';
+import { cn } from '@/lib/utils';
 
 dayjs.extend(relativeTime);
 
 const STATUSES = [
-  'new','contacted','interested','not_interested','call_back',
-  'account_opened','ftd_done','cold','dnd','inactive','reactive',
+  'new', 'contacted', 'interested', 'not_interested', 'call_back',
+  'account_opened', 'ftd_done', 'cold', 'dnd',
+];
+const LANGUAGES = [
+  'english', 'tamil', 'telugu', 'hindi', 'marathi',
+  'gujarati', 'bengali', 'kannada', 'malayalam', 'punjabi',
+];
+const SOURCES = [
+  'facebook_ads', 'instagram_ads', 'google_ads', 'organic', 'referral', 'manual',
+];
+const EXPERIENCE = [
+  'beginner_0_6m', 'beginner_6_12m', 'intermediate', 'advanced',
+];
+const MARKETS = [
+  'nse_options', 'nse_futures', 'bse_equity', 'commodity', 'currency', 'crypto',
 ];
 
-const colorBg = (name) => {
-  const hue = (name || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
-  return `hsl(${hue} 70% 92%)`;
+const fmtINR = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  return n.toLocaleString('en-IN');
 };
-const colorFg = (name) => {
-  const hue = (name || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
-  return `hsl(${hue} 60% 35%)`;
+
+const initialsOf = (lead) => {
+  const t = ((lead?.first_name?.[0] || '') + (lead?.last_name?.[0] || '')).toUpperCase();
+  return t || (lead?.phone?.slice(-2) || '?');
 };
-const initials = (n) => {
-  const t = (n || '').trim().split(/\s+/);
-  return ((t[0]?.[0] || '?') + (t[1]?.[0] || '')).toUpperCase();
-};
+
+/**
+ * Stable form-field renderer — hoisted out of the page component so its
+ * <input>/<Select> aren't re-mounted on every parent render (which would
+ * blow away focus on each keystroke).
+ */
+function Field({ label, name, value, onChange, type = 'text', options, disabled, hint, icon: Icon }) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+        {Icon && <Icon size={11} />} {label}
+      </Label>
+      {options ? (
+        <Select value={value || ''} onValueChange={(v) => onChange(name, v)} disabled={disabled}>
+          <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {options.map((o) => {
+              const optValue = typeof o === 'string' ? o : o.value;
+              const optLabel = typeof o === 'string' ? o.replace(/_/g, ' ') : o.label;
+              return <SelectItem key={optValue} value={optValue}>{optLabel}</SelectItem>;
+            })}
+          </SelectContent>
+        </Select>
+      ) : (
+        <Input
+          type={type}
+          value={value ?? ''}
+          onChange={(e) => onChange(name, e.target.value)}
+          disabled={disabled}
+          className="h-9 text-sm"
+        />
+      )}
+      {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
 
 export default function LeadDetailPage() {
-  const { id } = useParams();
   const router = useRouter();
-  const { can } = useAuth();
-  const canManage = can('super_admin', 'admin', 'floor_manager');
+  const params = useParams();
+  const id = params?.id;
+
+  const user = useStore((s) => s.user);
+  const isAdmin = useStore((s) => s.isAdmin);
+  const isSuperAdmin = useStore((s) => s.isSuperAdmin);
 
   const [lead, setLead] = useState(null);
+  const [form, setForm] = useState({});
+  const [telesellers, setTelesellers] = useState([]);
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [hasChanges, setHasChanges] = useState(false);
 
-  const [activityOpen, setActivityOpen] = useState(false);
-  const [statusOpen, setStatusOpen] = useState(false);
-  const [confirm, setConfirm] = useState(null); // { action, label }
-  const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [scheduleAt, setScheduleAt] = useState('');
+  // Undo-request modal state. We render the modal locally instead of using a
+  // global confirm because the reason text needs a textarea, not a yes/no.
+  const [showUndoModal, setShowUndoModal] = useState(false);
+  const [undoReason, setUndoReason] = useState('');
+  const [submittingUndo, setSubmittingUndo] = useState(false);
+  const [pendingUndo, setPendingUndo] = useState(null);
 
-  const fetchAll = useCallback(async () => {
+  // BRUTE-FORCE OVERRIDE: trust user.role directly so editing is never gated
+  // by an async-loaded flag. On a hard reload, the Zustand persist layer only
+  // restores `user` — `isAdmin` / `isSuperAdmin` default to false until
+  // fetchPermissions resolves, which was leaving every field disabled.
+  const isAdminRole = user?.role === 'admin' || user?.role === 'super_admin';
+  const canEditAll = isAdmin || isSuperAdmin || isAdminRole;
+  const isAssignedToMe = Boolean(
+    lead?.assigned_to_id && user?.id && String(lead.assigned_to_id) === String(user.id)
+  );
+  const isClosedByMe = Boolean(
+    lead?.closed_by_user_id && user?.id && String(lead.closed_by_user_id) === String(user.id)
+  );
+  const canEditAssigned = isAssignedToMe && (user?.role === 'tele_sales' || user?.role === 'senior');
+  const canEdit = canEditAll || canEditAssigned;
+  const canDelete = canEditAll;
+
+  const isDeal = Boolean(lead?.ftd_at);
+  const canRequestUndo = isDeal && (isClosedByMe || isAssignedToMe || canEditAll);
+
+  const loadAll = useCallback(async () => {
+    if (!id) return;
     setLoading(true);
-    setErr(null);
     try {
-      const [leadRes, actRes] = await Promise.allSettled([
+      const [leadRes, actRes] = await Promise.all([
         api.get(`/leads/${id}`),
         api.get(`/leads/${id}/activities`),
       ]);
-      if (leadRes.status === 'fulfilled') setLead(unwrap(leadRes.value) || null);
-      if (actRes.status === 'fulfilled') setActivities(unwrap(actRes.value)?.data || unwrap(actRes.value) || []);
-      if (leadRes.status === 'rejected') {
-        const e = leadRes.reason;
-        setErr(e?.code === 'ERR_NETWORK' ? 'Backend not reachable on :5000' : 'Could not load lead');
+      const leadData = unwrap(leadRes);
+      setLead(leadData);
+      setForm(leadData || {});
+      setHasChanges(false);
+      setActivities(unwrap(actRes) || []);
+
+      if (leadData?.ftd_at) {
+        try {
+          const undoRes = await api.get('/deals/undo-requests', {
+            params: { status: 'pending', limit: 50 },
+          });
+          const all = unwrap(undoRes)?.items || [];
+          setPendingUndo(all.find((r) => r.lead_id === leadData.id) || null);
+        } catch { /* non-fatal */ }
+      } else {
+        setPendingUndo(null);
       }
+
+      if (canEditAll) {
+        try {
+          const telesRes = await api.get('/users', { params: { role: 'tele_sales', limit: 200 } });
+          const telesPayload = unwrap(telesRes);
+          const telesList = Array.isArray(telesPayload) ? telesPayload : telesPayload?.data || [];
+          setTelesellers(telesList);
+        } catch { /* non-fatal */ }
+      }
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to load lead');
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, canEditAll]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => { loadAll(); }, [loadAll]);
 
-  const patchStatus = async (next) => {
+  const updateField = useCallback((key, value) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setHasChanges(true);
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
     try {
-      await api.patch(`/leads/${id}/status`, { status: next });
-      toast.success('Status updated');
-      setStatusOpen(false);
-      fetchAll();
+      const {
+        id: _i, createdAt: _c, updatedAt: _u, assignedTo: _at, group: _g,
+        activities: _a, campaign: _cp, ...updates
+      } = form;
+      const res = await api.patch(`/leads/${id}`, updates);
+      const updated = unwrap(res);
+      setLead(updated);
+      setForm(updated || form);
+      setHasChanges(false);
+      toast.success('Lead updated');
+      try {
+        const actRes = await api.get(`/leads/${id}/activities`);
+        setActivities(unwrap(actRes) || []);
+      } catch { /* silent */ }
     } catch (e) {
-      toast.error(e?.response?.data?.message || 'Update failed');
-    }
-  };
-
-  const confirmAction = async () => {
-    if (!confirm) return;
-    try {
-      if (confirm.action === 'dnd' || confirm.action === 'cold') {
-        await api.patch(`/leads/${id}/status`, { status: confirm.action });
-        toast.success(`Marked ${confirm.label}`);
-        fetchAll();
-      }
-    } catch (e) {
-      toast.error(e?.response?.data?.message || 'Action failed');
+      toast.error(e?.response?.data?.message || 'Save failed');
     } finally {
-      setConfirm(null);
+      setSaving(false);
     }
   };
 
-  const scheduleCallback = async () => {
-    if (!scheduleAt) return;
+  const submitUndoRequest = async () => {
+    if (!undoReason.trim()) {
+      toast.error('Please describe why this deal should be undone');
+      return;
+    }
+    setSubmittingUndo(true);
     try {
-      await api.post(`/leads/${id}/activities`, {
-        type: 'call',
-        outcome: 'callback',
-        scheduled_at: scheduleAt,
-        notes: 'Scheduled callback',
-      });
-      toast.success('Callback scheduled');
-      setScheduleOpen(false);
-      setScheduleAt('');
-      fetchAll();
-    } catch {
-      toast.error('Could not schedule');
+      const res = await api.post(`/deals/${id}/undo-request`, { reason: undoReason.trim() });
+      const created = unwrap(res);
+      setPendingUndo(created);
+      setShowUndoModal(false);
+      setUndoReason('');
+      toast.success('Undo request submitted — admin will review');
+      try {
+        const actRes = await api.get(`/leads/${id}/activities`);
+        setActivities(unwrap(actRes) || []);
+      } catch { /* silent */ }
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to submit undo request');
+    } finally {
+      setSubmittingUndo(false);
     }
   };
 
-  if (loading && !lead) {
+  const cancelUndoRequest = async () => {
+    if (!pendingUndo) return;
+    if (!confirm('Withdraw this undo request?')) return;
+    try {
+      await api.post(`/deals/undo-requests/${pendingUndo.id}/cancel`, {});
+      setPendingUndo(null);
+      toast.success('Undo request withdrawn');
+      try {
+        const actRes = await api.get(`/leads/${id}/activities`);
+        setActivities(unwrap(actRes) || []);
+      } catch { /* silent */ }
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to cancel');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!lead) return;
+    if (!confirm(`Delete ${lead.first_name} ${lead.last_name}? Will move to recycle bin.`)) return;
+    try {
+      await api.delete(`/leads/${id}`);
+      toast.success('Lead moved to recycle bin');
+      router.push('/leads');
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to delete');
+    }
+  };
+
+  const copyToClipboard = (text, label) => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text);
+    toast.success(`Copied ${label || text}`);
+  };
+
+  if (loading) {
     return (
-      <div className="min-h-[50vh] flex items-center justify-center text-ink-muted">
-        <Loader2 size={18} className="animate-spin" />
+      <div className="space-y-4 animate-pulse">
+        <div className="h-32 rounded-xl bg-muted/50" />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 space-y-3">
+            <div className="h-9 w-64 rounded-md bg-muted/50" />
+            <div className="h-96 rounded-xl bg-muted/50" />
+          </div>
+          <div className="space-y-3">
+            <div className="h-56 rounded-xl bg-muted/50" />
+            <div className="h-40 rounded-xl bg-muted/50" />
+          </div>
+        </div>
       </div>
     );
   }
-
   if (!lead) {
     return (
-      <div className="space-y-4">
-        <button onClick={() => router.back()} className="btn-ghost text-sm">
-          <ArrowLeft size={14} /> Back
-        </button>
-        <EmptyState
-          title={err || 'Lead not found'}
-          message={`Lead ${id} unavailable. The detail loads from /api/v1/leads/${id} once backend is up.`}
-        />
+      <div className="text-center py-20">
+        <p className="text-muted-foreground">Lead not found</p>
+        <Button variant="outline" size="sm" className="mt-4" onClick={() => router.push('/leads')}>
+          <ArrowLeft className="h-3.5 w-3.5 mr-1.5" /> Back to leads
+        </Button>
       </div>
     );
   }
 
-  const name = lead.name || `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || 'Unnamed';
-  const status = lead.status || lead.lead_status;
-  const hasArk = Boolean(lead.ark_account_number || lead.ark_username);
-  const hasFtd = Boolean(lead.ftd_at || lead.ftd_amount);
+  const fullName = `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || '—';
+  const status = lead.lead_status || lead.status;
+  const phoneDigits = (lead.phone || '').replace(/[^\d+]/g, '');
+  const waNumber = (lead.whatsapp_number || lead.phone || '').replace(/\D/g, '');
 
   return (
     <div className="space-y-5">
-      <button onClick={() => router.back()} className="btn-ghost text-sm">
-        <ArrowLeft size={14} /> Back to leads
-      </button>
-
-      <div className="flex flex-col lg:flex-row gap-4">
-        {/* LEFT */}
-        <div className="flex-1 min-w-0 space-y-4">
-          {/* Card 1: Header */}
-          <div className="card">
-            <div className="flex flex-wrap items-start gap-4">
-              <div
-                className="w-16 h-16 rounded-full flex items-center justify-center text-xl font-semibold shrink-0"
-                style={{ background: colorBg(name), color: colorFg(name) }}
+      {/* ────────── IDENTITY HEADER ────────── */}
+      <Card className="overflow-hidden">
+        {/* Accent strip — colour pulled from the status palette so the header
+            "matches" the badge below. Subtle: 4px tall on the top edge. */}
+        <div
+          className="h-1 w-full"
+          style={{ background: STATUS_HEX[status] || 'hsl(var(--border))' }}
+          aria-hidden
+        />
+        <CardContent className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            {/* Left: back, avatar, name, status, meta */}
+            <div className="flex items-start gap-4 min-w-0 flex-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 -ml-1 shrink-0"
+                onClick={() => router.push('/leads')}
+                aria-label="Back"
               >
-                {initials(name)}
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+
+              <div
+                className="flex h-14 w-14 items-center justify-center rounded-xl text-base font-semibold tracking-tight border shrink-0"
+                style={{
+                  background: `${STATUS_HEX[status] || '#94A3B8'}1A`,
+                  color: STATUS_HEX[status] || '#94A3B8',
+                  borderColor: `${STATUS_HEX[status] || '#94A3B8'}40`,
+                }}
+              >
+                {initialsOf(lead)}
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-wrap items-center gap-3">
-                  <h2 className="text-xl font-semibold text-ink-primary">{name}</h2>
-                  <button
-                    onClick={() => setStatusOpen(true)}
-                    className="hover:scale-[1.02] transition-transform"
-                    title="Change status"
-                  >
-                    <StatusBadge status={status} color={lead.status_color} size="md" />
-                  </button>
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
-                  {lead.phone && (
-                    <span className="mono text-ink-secondary inline-flex items-center gap-1.5">
-                      <PhoneCall size={12} /> {lead.phone}
+
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-xl font-semibold tracking-tight truncate">{fullName}</h1>
+                  <StatusBadge status={status} size="lg" />
+                  {isDeal && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+                      <Award size={10} /> Deal
                     </span>
+                  )}
+                  {lead.ark_account_number && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
+                      <CheckCircle2 size={10} /> ARK
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  {lead.phone && (
+                    <button
+                      onClick={() => copyToClipboard(lead.phone, lead.phone)}
+                      className="mono inline-flex items-center gap-1.5 hover:text-foreground transition-colors group"
+                    >
+                      <Phone size={11} />
+                      {lead.phone}
+                      <Copy size={10} className="opacity-0 group-hover:opacity-60 transition-opacity" />
+                    </button>
                   )}
                   {lead.email && (
-                    <span className="text-ink-secondary inline-flex items-center gap-1.5">
-                      <Mail size={12} /> {lead.email}
+                    <button
+                      onClick={() => copyToClipboard(lead.email, 'email')}
+                      className="mono inline-flex items-center gap-1.5 hover:text-foreground transition-colors group"
+                    >
+                      <Mail size={11} />
+                      <span className="truncate max-w-[220px]">{lead.email}</span>
+                      <Copy size={10} className="opacity-0 group-hover:opacity-60 transition-opacity" />
+                    </button>
+                  )}
+                  {(lead.city || lead.state) && (
+                    <span className="inline-flex items-center gap-1.5">
+                      <MapPin size={11} />
+                      {[lead.city, lead.state].filter(Boolean).join(', ')}
+                    </span>
+                  )}
+                  {lead.language && (
+                    <span className="inline-flex items-center gap-1.5 capitalize">
+                      <Languages size={11} />
+                      {lead.language}
+                    </span>
+                  )}
+                  {lead.campaign_name && (
+                    <span className="inline-flex items-center gap-1.5 truncate max-w-[200px]">
+                      <Briefcase size={11} /> {lead.campaign_name}
                     </span>
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                {lead.whatsapp && (
-                  <a
-                    href={`https://wa.me/${(lead.whatsapp || '').replace(/\D/g, '')}`}
-                    target="_blank" rel="noreferrer"
-                    className="btn-ghost text-sm"
-                    title="WhatsApp"
-                  >
-                    <MessageSquare size={14} />
-                  </a>
-                )}
-                {lead.email && (
-                  <a href={`mailto:${lead.email}`} className="btn-ghost text-sm" title="Email">
-                    <Mail size={14} />
-                  </a>
-                )}
-                {canManage && (
-                  <button className="btn-ghost text-sm" onClick={() => toast('Reassign coming with users API')}>
-                    <UserCog size={14} /> Reassign
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Card 2: Basic Info */}
-          <InfoCard title="Basic Info" icon={Tag}>
-            <Grid>
-              <Field label="Language"          value={lead.language} />
-              <Field label="Preferred Language" value={lead.preferred_language} />
-              <Field label="City"              value={lead.city} icon={MapPin} />
-              <Field label="State"             value={lead.state} />
-              <Field label="Contact Method"    value={lead.contact_method} />
-              <Field label="Lead Source"       value={lead.source} />
-              <Field label="Campaign"          value={lead.campaign_name || lead.campaign} />
-              <Field label="Department"        value={lead.department} />
-              <Field label="Consent Date"      value={lead.consent_date ? dayjs(lead.consent_date).format('DD MMM YYYY') : '—'} />
-            </Grid>
-          </InfoCard>
-
-          {/* Card 3: Trading Profile */}
-          <InfoCard title="Trading Profile" icon={Building}>
-            <Grid>
-              <Field label="Trading Experience" value={lead.trading_experience} />
-              <Field label="Current Platform"   value={lead.current_platform} />
-              <Field label="Preferred Market"   value={lead.preferred_market} />
-              <Field label="Date of Birth"      value={lead.date_of_birth ? dayjs(lead.date_of_birth).format('DD MMM YYYY') : '—'} />
-            </Grid>
-          </InfoCard>
-
-          {/* Card 4: ARK Terminal */}
-          <div
-            className={clsx(
-              'card border-l-[4px]',
-              hasArk ? 'border-l-amber-400' : 'border-l-slate-300'
-            )}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-ink-primary inline-flex items-center gap-2">
-                <Zap size={14} className="text-amber-500" /> ARK Terminal
-              </h3>
-              <ArkStatusIndicator status={status} hasArk={hasArk} hasFtd={hasFtd} />
-            </div>
-            <Grid>
-              <Field label="ARK Username"    value={lead.ark_username} mono />
-              <Field label="Account Number"  value={lead.ark_account_number} mono />
-              <Field label="UID"             value={lead.ark_uid} mono />
-              <Field label="Account Opened"  value={lead.account_opened_at ? dayjs(lead.account_opened_at).format('DD MMM YYYY, HH:mm') : '—'} />
-              <Field label="Last Activity"   value={lead.ark_last_activity_at ? dayjs(lead.ark_last_activity_at).fromNow() : '—'} />
-              <Field label="FTD Date"        value={lead.ftd_at ? dayjs(lead.ftd_at).format('DD MMM YYYY') : '—'} />
-              <Field
-                label="FTD Amount"
-                value={lead.ftd_amount ? `₹${inrFormat(lead.ftd_amount)}` : '—'}
-                accent={lead.ftd_amount ? 'text-emerald-700 font-semibold' : ''}
-              />
-            </Grid>
-          </div>
-
-          {/* Card 5: Campaign Info */}
-          <InfoCard title="Campaign Info" icon={Megaphone}>
-            <Grid>
-              <Field label="Campaign Name" value={lead.campaign_name || lead.campaign} />
-              <Field label="Ad Set"        value={lead.ad_set_name} />
-              <Field label="Ad Name"       value={lead.ad_name} />
-              <Field label="Platform"      value={lead.platform} pill />
-              <Field label="Facebook Lead ID" value={lead.facebook_lead_id} mono />
-            </Grid>
-          </InfoCard>
-
-          {/* Card 6: Interaction Stats */}
-          <div className="card">
-            <h3 className="text-sm font-semibold text-ink-primary mb-3">Interaction Stats</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              <MiniStat icon="📞" label="Total Calls" value={lead.total_calls ?? 0} />
-              <MiniStat icon="⏱" label="Duration" value={formatDuration(lead.total_call_seconds || 0)} />
-              <MiniStat icon="💬" label="Sent" value={lead.messages_sent ?? 0} />
-              <MiniStat icon="📥" label="Received" value={lead.messages_received ?? 0} />
-              <MiniStat icon="🔁" label="Follow-ups" value={lead.followups ?? 0} />
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT */}
-        <div className="lg:w-80 lg:shrink-0 space-y-3">
-          <div className="lg:sticky lg:top-[72px] space-y-3">
-            <button
-              onClick={() => setActivityOpen(true)}
-              className="btn-primary w-full text-sm"
-            >
-              <Activity size={14} /> Log Activity
-            </button>
-
-            <div className="card p-0 overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <h3 className="text-sm font-semibold text-ink-primary">Activity Feed</h3>
-              </div>
-              <div className="max-h-[60vh] overflow-y-auto">
-                {activities.length === 0 ? (
-                  <div className="p-6 text-center text-sm text-ink-muted">No activity yet</div>
-                ) : (
-                  <ul>
-                    {activities.map((a) => <ActivityItem key={a.id} item={a} />)}
-                  </ul>
-                )}
-              </div>
             </div>
 
-            <div className="card">
-              <h3 className="text-sm font-semibold text-ink-primary mb-3">Quick Actions</h3>
-              <div className="space-y-1.5">
-                <QuickAction icon={Calendar} label="Schedule Callback" onClick={() => setScheduleOpen(true)} />
-                <QuickAction icon={BanIcon}  label="Mark DND"  tone="danger" onClick={() => setConfirm({ action: 'dnd', label: 'DND' })} />
-                <QuickAction icon={Snowflake} label="Mark Cold" tone="muted" onClick={() => setConfirm({ action: 'cold', label: 'Cold' })} />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <ActivityModal
-        open={activityOpen}
-        onClose={() => setActivityOpen(false)}
-        leadId={id}
-        onSaved={fetchAll}
-      />
-
-      <Modal
-        open={statusOpen}
-        onClose={() => setStatusOpen(false)}
-        title="Change Status"
-        description="Pick the new lead status."
-      >
-        <div className="grid grid-cols-2 gap-2">
-          {STATUSES.map((s) => (
-            <button
-              key={s}
-              onClick={() => patchStatus(s)}
-              className={clsx(
-                'flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-all duration-150',
-                s === status
-                  ? 'border-accent bg-accent/5 text-ink-primary'
-                  : 'border-slate-200 hover:border-slate-300 text-ink-secondary'
+            {/* Right: primary actions */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {hasChanges && (
+                <Button onClick={handleSave} disabled={saving}>
+                  <Save className="h-3.5 w-3.5 mr-1.5" /> {saving ? 'Saving…' : 'Save changes'}
+                </Button>
               )}
-            >
-              <span className="w-2 h-2 rounded-full" style={{ background: statusColor(s) }} />
-              <span className="capitalize">{s.replaceAll('_', ' ')}</span>
-            </button>
-          ))}
-        </div>
-      </Modal>
-
-      <Modal
-        open={Boolean(confirm)}
-        onClose={() => setConfirm(null)}
-        title={`Mark as ${confirm?.label}?`}
-        description="This will change the lead status."
-        footer={
-          <>
-            <button className="btn-ghost text-sm" onClick={() => setConfirm(null)}>Cancel</button>
-            <button className="btn-danger text-sm" onClick={confirmAction}>Confirm</button>
-          </>
-        }
-      >
-        <p className="text-sm text-ink-secondary">
-          You can revert this later from the status dropdown.
-        </p>
-      </Modal>
-
-      <Modal
-        open={scheduleOpen}
-        onClose={() => setScheduleOpen(false)}
-        title="Schedule Callback"
-        description="Pick a date and time."
-        footer={
-          <>
-            <button className="btn-ghost text-sm" onClick={() => setScheduleOpen(false)}>Cancel</button>
-            <button className="btn-primary text-sm" onClick={scheduleCallback} disabled={!scheduleAt}>Schedule</button>
-          </>
-        }
-      >
-        <input
-          type="datetime-local"
-          value={scheduleAt}
-          onChange={(e) => setScheduleAt(e.target.value)}
-          className="input"
-        />
-      </Modal>
-    </div>
-  );
-}
-
-/* ---------- helpers ---------- */
-function ArkStatusIndicator({ status, hasArk, hasFtd }) {
-  if (hasFtd || status === 'ftd_done') {
-    return (
-      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-        <Wallet size={12} /> FTD Done
-      </span>
-    );
-  }
-  if (hasArk || status === 'account_opened') {
-    return (
-      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-teal-50 text-teal-700 border border-teal-200">
-        ✓ Account Opened
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">
-      No Account
-    </span>
-  );
-}
-
-function InfoCard({ title, icon: Icon, children }) {
-  return (
-    <div className="card">
-      <h3 className="text-sm font-semibold text-ink-primary mb-3 inline-flex items-center gap-2">
-        {Icon && <Icon size={14} className="text-ink-muted" />} {title}
-      </h3>
-      {children}
-    </div>
-  );
-}
-
-function Grid({ children }) {
-  return <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">{children}</div>;
-}
-
-function Field({ label, value, mono, icon: Icon, accent, pill }) {
-  const shown = value === 0 || value ? value : '—';
-  return (
-    <div>
-      <p className="text-[11px] font-medium uppercase tracking-wide text-ink-muted mb-0.5 inline-flex items-center gap-1">
-        {Icon && <Icon size={10} />} {label}
-      </p>
-      {pill && shown !== '—' ? (
-        <span className="badge bg-slate-100 text-ink-primary text-xs">{shown}</span>
-      ) : (
-        <p className={clsx('text-sm text-ink-primary truncate', mono && 'mono text-xs', accent)}>
-          {shown}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function MiniStat({ icon, label, value }) {
-  return (
-    <div className="rounded-lg bg-surface-alt px-3 py-2.5 text-center">
-      <div className="text-base mb-0.5">{icon}</div>
-      <p className="mono text-sm font-semibold text-ink-primary tabular-nums leading-none">{value}</p>
-      <p className="text-[10px] text-ink-muted mt-1 uppercase tracking-wide">{label}</p>
-    </div>
-  );
-}
-
-function formatDuration(sec) {
-  const m = Math.floor((sec || 0) / 60);
-  const s = (sec || 0) % 60;
-  return `${m}m ${s}s`;
-}
-
-function ActivityItem({ item }) {
-  const ICONS = { call: PhoneCall, note: StickyNote, whatsapp: MessageSquare, email: Mail, status_change: ChevronRight, ark: Zap };
-  const Icon = ICONS[item.type] || Activity;
-  const isArk = item.type === 'ark';
-  const isStatusChange = item.type === 'status_change';
-
-  return (
-    <li className={clsx('px-4 py-3 border-b border-slate-50 hover:bg-surface-alt transition-colors', isArk && 'border-l-2 border-l-amber-400')}>
-      <div className="flex items-start gap-2.5">
-        <div className="w-7 h-7 rounded-full bg-accent/10 text-accent flex items-center justify-center shrink-0 mt-0.5">
-          <Icon size={13} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-medium text-ink-primary truncate">
-              {item.actor_name || item.user?.name || 'System'}
-            </p>
-            <span className="mono text-[10px] text-ink-muted whitespace-nowrap">
-              {item.created_at ? dayjs(item.created_at).fromNow() : ''}
-            </span>
+              {canRequestUndo && !pendingUndo && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowUndoModal(true)}
+                  className="border-amber-500/40 text-amber-700 dark:text-amber-400 hover:bg-amber-500/10"
+                >
+                  <Undo2 className="h-3.5 w-3.5 mr-1.5" /> Request undo
+                </Button>
+              )}
+              {canDelete && (
+                <Button variant="destructive" size="sm" onClick={handleDelete}>
+                  <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Delete
+                </Button>
+              )}
+            </div>
           </div>
 
-          {isStatusChange ? (
-            <p className="text-xs text-ink-secondary mt-0.5">
-              <span className="text-ink-primary">{item.from_status}</span>
-              <span className="text-accent mx-1">→</span>
-              <span className="text-ink-primary">{item.to_status}</span>
-            </p>
-          ) : item.type === 'call' ? (
-            <div className="mt-1 space-y-1">
-              <div className="flex flex-wrap gap-1.5">
-                {item.duration_seconds !== undefined && (
-                  <span className="badge bg-slate-100 text-slate-700 text-[10px]">
-                    <Clock size={9} className="mr-1" />
-                    {formatDuration(item.duration_seconds)}
+          {/* Contact quick-actions — telesellers spend their day here, so the
+              dial / WhatsApp / Email shortcuts go right under the identity. */}
+          {(phoneDigits || lead.email) && (
+            <div className="mt-4 pt-4 border-t flex flex-wrap items-center gap-2">
+              {phoneDigits && (
+                <a
+                  href={`tel:${phoneDigits}`}
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  <Phone size={12} /> Call
+                </a>
+              )}
+              {waNumber && (
+                <a
+                  href={`https://wa.me/${waNumber.startsWith('91') ? waNumber : `91${waNumber}`}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border bg-card text-foreground hover:bg-muted transition-colors"
+                >
+                  <MessageCircle size={12} /> WhatsApp
+                </a>
+              )}
+              {lead.email && (
+                <a
+                  href={`mailto:${lead.email}`}
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border bg-card text-foreground hover:bg-muted transition-colors"
+                >
+                  <Mail size={12} /> Email
+                </a>
+              )}
+              <div className="ml-auto inline-flex items-center gap-3 text-[11px] text-muted-foreground">
+                {lead.last_contact_at && (
+                  <span className="inline-flex items-center gap-1">
+                    Last contact <span className="mono">{dayjs(lead.last_contact_at).fromNow()}</span>
                   </span>
                 )}
-                {item.outcome && (
-                  <span className="badge bg-blue-50 text-blue-700 text-[10px]">{item.outcome.replaceAll('_', ' ')}</span>
+                {lead.created_at && (
+                  <span className="inline-flex items-center gap-1">
+                    Created <span className="mono">{dayjs(lead.created_at).format('DD MMM YYYY')}</span>
+                  </span>
                 )}
               </div>
-              {item.notes && <p className="text-xs text-ink-secondary">{item.notes}</p>}
             </div>
-          ) : (
-            <p className="text-xs text-ink-secondary mt-0.5 whitespace-pre-line">{item.content || item.notes || '—'}</p>
           )}
+        </CardContent>
+      </Card>
+
+      {/* ────────── BANNERS ────────── */}
+      {isDeal && (
+        <Card className="border-emerald-500/30 bg-emerald-500/5">
+          <CardContent className="p-3 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+            <Award className="h-4 w-4" />
+            <span>
+              This lead is a closed deal
+              {lead.closed_by_name && (
+                <> — credited to <span className="font-medium">{lead.closed_by_name}</span></>
+              )}
+              {lead.deposited_amount && (
+                <> · deposit <span className="mono font-medium">₹{fmtINR(lead.deposited_amount)}</span></>
+              )}
+              .
+            </span>
+          </CardContent>
+        </Card>
+      )}
+
+      {pendingUndo && (
+        <Card className="border-amber-500/40 bg-amber-500/5">
+          <CardContent className="p-3 flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
+            <Undo2 className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="font-medium">Undo request pending admin review</p>
+              <p className="mt-1 text-amber-700/80 dark:text-amber-300/80">
+                Reason: {pendingUndo.reason}
+              </p>
+              {String(pendingUndo.requested_by_user_id) === String(user?.id) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-2 h-7 text-xs text-amber-700 dark:text-amber-300 hover:bg-amber-500/15"
+                  onClick={cancelUndoRequest}
+                >
+                  Withdraw request
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {!canEdit && (
+        <Card className="border-amber-500/30 bg-amber-500/5">
+          <CardContent className="p-3 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-200">
+            <AlertCircle className="h-4 w-4" />
+            You don&rsquo;t have permission to edit this lead. View only.
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ────────── UNDO MODAL ────────── */}
+      {showUndoModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          onClick={() => !submittingUndo && setShowUndoModal(false)}
+        >
+          <Card className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Undo2 className="h-4 w-4 text-amber-500" /> Request to undo this deal
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                An admin or super admin will review your request. If approved, the FTD
+                marker, deposit amount and closer credit will be cleared and the lead
+                will revert to its prior status.
+              </p>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Reason</Label>
+                <Textarea
+                  rows={4}
+                  placeholder="Why should this deal be undone?"
+                  value={undoReason}
+                  onChange={(e) => setUndoReason(e.target.value)}
+                  className="text-sm"
+                  autoFocus
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="ghost" size="sm" onClick={() => setShowUndoModal(false)} disabled={submittingUndo}>
+                  Cancel
+                </Button>
+                <Button size="sm" onClick={submitUndoRequest} disabled={submittingUndo || !undoReason.trim()}>
+                  {submittingUndo ? 'Submitting…' : 'Submit request'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </div>
+      )}
+
+      {/* ────────── MAIN GRID: TABS + STICKY RAIL ────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          <Tabs defaultValue="details" className="w-full">
+            <TabsList>
+              <TabsTrigger value="details">
+                <FileText size={11} className="mr-1.5" /> Details
+              </TabsTrigger>
+              <TabsTrigger value="notes">
+                <ListTree size={11} className="mr-1.5" /> Notes
+              </TabsTrigger>
+              <TabsTrigger value="activity">
+                <Activity size={11} className="mr-1.5" /> Activity ({activities.length})
+              </TabsTrigger>
+            </TabsList>
+
+            {/* ─── DETAILS ─── */}
+            <TabsContent value="details" className="space-y-4 mt-4">
+              {/* Personal */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <Building2 size={13} className="text-muted-foreground" /> Personal
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label="First name"      name="first_name"      value={form.first_name}      onChange={updateField} disabled={!canEdit} />
+                  <Field label="Last name"       name="last_name"       value={form.last_name}       onChange={updateField} disabled={!canEdit} />
+                  <Field label="Phone"           name="phone"           value={form.phone}           onChange={updateField} disabled={!canEdit} />
+                  <Field label="WhatsApp"        name="whatsapp_number" value={form.whatsapp_number} onChange={updateField} disabled={!canEdit} />
+                  <Field label="Email"           name="email"           value={form.email}           onChange={updateField} disabled={!canEdit} type="email" />
+                </CardContent>
+              </Card>
+
+              {/* Address */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <MapPin size={13} className="text-muted-foreground" /> Address
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Field label="City"     name="city"     value={form.city}     onChange={updateField} disabled={!canEdit} />
+                  <Field label="State"    name="state"    value={form.state}    onChange={updateField} disabled={!canEdit} />
+                  <Field label="Pincode"  name="pincode"  value={form.pincode}  onChange={updateField} disabled={!canEdit} />
+                </CardContent>
+              </Card>
+
+              {/* Trading profile */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <Briefcase size={13} className="text-muted-foreground" /> Trading profile
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field
+                    label="Language" name="language" value={form.language}
+                    onChange={updateField}
+                    disabled
+                    hint="Locked — set from the campaign at ingest"
+                    options={LANGUAGES}
+                  />
+                  <Field label="Preferred language" name="preferred_language" value={form.preferred_language} onChange={updateField} disabled={!canEdit} options={LANGUAGES} />
+                  <Field label="Lead source"        name="lead_source"        value={form.lead_source}        onChange={updateField} disabled={!canEdit} options={SOURCES} />
+                  <Field label="Trading experience" name="trading_experience" value={form.trading_experience} onChange={updateField} disabled={!canEdit} options={EXPERIENCE} />
+                  <Field label="Preferred market"   name="preferred_market"   value={form.preferred_market}   onChange={updateField} disabled={!canEdit} options={MARKETS} />
+                  <Field label="Investment budget"  name="investment_budget"  value={form.investment_budget}  onChange={updateField} disabled={!canEdit} type="number" />
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ─── NOTES ─── */}
+            <TabsContent value="notes" className="mt-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Internal notes</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Textarea
+                    value={form.notes || ''}
+                    onChange={(e) => updateField('notes', e.target.value)}
+                    disabled={!canEdit}
+                    rows={10}
+                    className="text-sm"
+                    placeholder="Add internal notes about this lead — call summary, objections, next steps…"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-2">
+                    Notes are visible to everyone who can see this lead. Use the activity log for time-stamped events.
+                  </p>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ─── ACTIVITY ─── */}
+            <TabsContent value="activity" className="mt-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Activity history</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {activities.length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-8">
+                      No activity logged yet.
+                    </p>
+                  ) : (
+                    <ol className="relative space-y-3 before:absolute before:left-[7px] before:top-2 before:bottom-2 before:w-px before:bg-border">
+                      {activities.map((a) => (
+                        <li key={a.id} className="relative pl-6">
+                          <span
+                            className="absolute left-0 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full border-2 border-background bg-primary"
+                            aria-hidden
+                          />
+                          <div className="flex items-baseline justify-between gap-3">
+                            <p className="text-sm font-medium leading-tight">{a.title}</p>
+                            <span className="text-[10px] mono text-muted-foreground whitespace-nowrap">
+                              {a.createdAt
+                                ? dayjs(a.createdAt).format('DD MMM · HH:mm')
+                                : ''}
+                            </span>
+                          </div>
+                          {a.description && (
+                            <p className="text-xs text-muted-foreground mt-1">{a.description}</p>
+                          )}
+                          <p className="text-[10px] text-muted-foreground mt-1">
+                            by {a.user ? `${a.user.first_name} ${a.user.last_name}` : 'System'}
+                            {a.user?.role && ` (${a.user.role.replace(/_/g, ' ')})`}
+                          </p>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
+
+        {/* ────────── STICKY RIGHT RAIL ────────── */}
+        <aside className="lg:col-span-1">
+          <div className="lg:sticky lg:top-20 space-y-4">
+            {/* Status & sub-status */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2">
+                  <Hash size={13} className="text-muted-foreground" /> Status
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Field label="Lead status" name="lead_status" value={form.lead_status} onChange={updateField} disabled={!canEdit} options={STATUSES} />
+                <Field label="Sub status"  name="sub_status"  value={form.sub_status}  onChange={updateField} disabled={!canEdit} />
+              </CardContent>
+            </Card>
+
+            {/* Assignment */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2">
+                  <Globe size={13} className="text-muted-foreground" /> Assignment
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1.5">
+                <Label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Assigned to
+                </Label>
+                <Select
+                  value={form.assigned_to_id || ''}
+                  onValueChange={(v) => updateField('assigned_to_id', v)}
+                  disabled={!canEditAll}
+                >
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue placeholder="Unassigned" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {telesellers.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.first_name} {t.last_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {!canEditAll && (
+                  <p className="text-[10px] text-muted-foreground">
+                    Reassignment requires floor manager or admin.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* ARK details */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2">
+                  <Wallet size={13} className="text-muted-foreground" /> ARK terminal
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Field label="ARK account number" name="ark_account_number" value={form.ark_account_number} onChange={updateField} disabled={!canEdit} />
+                <Field label="Deposited amount"   name="deposited_amount"   value={form.deposited_amount}   onChange={updateField} disabled={!canEdit} type="number" />
+                {lead.ftd_at && (
+                  <div className="text-[11px] text-muted-foreground border-t pt-2">
+                    FTD recorded <span className="mono text-foreground">{dayjs(lead.ftd_at).format('DD MMM YYYY')}</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Activity preview */}
+            {activities.length > 0 && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity size={13} className="text-muted-foreground" /> Recent activity
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2.5">
+                  {activities.slice(0, 3).map((a) => (
+                    <div key={a.id} className="text-xs">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-medium truncate">{a.title}</span>
+                        <span className="text-[10px] mono text-muted-foreground whitespace-nowrap">
+                          {a.createdAt ? dayjs(a.createdAt).fromNow() : ''}
+                        </span>
+                      </div>
+                      {a.description && (
+                        <p className="text-muted-foreground truncate mt-0.5">{a.description}</p>
+                      )}
+                    </div>
+                  ))}
+                  {activities.length > 3 && (
+                    <p className="text-[10px] text-muted-foreground text-center pt-1 border-t">
+                      +{activities.length - 3} more in Activity tab
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </aside>
       </div>
-    </li>
+    </div>
   );
 }
 
-function QuickAction({ icon: Icon, label, onClick, tone = 'default' }) {
-  const toneClass = {
-    default: 'text-ink-secondary hover:text-ink-primary hover:bg-surface-alt',
-    danger:  'text-red-600 hover:bg-red-50',
-    muted:   'text-slate-500 hover:text-ink-primary hover:bg-surface-alt',
-  }[tone];
-  return (
-    <button
-      onClick={onClick}
-      className={clsx('w-full text-left text-sm flex items-center gap-2.5 px-3 py-2 rounded-md transition-colors duration-150', toneClass)}
-    >
-      <Icon size={14} /> {label}
-    </button>
-  );
-}
+// Status hex map — sourced from CLAUDE.md, used for the identity header accent
+// strip and the avatar tint so the visual identity of the lead reflects its
+// current status at a glance.
+const STATUS_HEX = {
+  new: '#6366F1',
+  contacted: '#3B82F6',
+  interested: '#8B5CF6',
+  not_interested: '#EF4444',
+  call_back: '#F59E0B',
+  account_opened: '#14B8A6',
+  ftd_done: '#10B981',
+  cold: '#6B7280',
+  dnd: '#DC2626',
+  inactive: '#9CA3AF',
+  reactive: '#F97316',
+};

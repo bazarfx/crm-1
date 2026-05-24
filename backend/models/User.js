@@ -11,6 +11,7 @@ const ROLES = [
   'back_office',
   'auditor',
   'archive',
+  'custom',
 ];
 
 class User extends Model {
@@ -54,7 +55,23 @@ User.init(
     },
     last_login_at: { type: DataTypes.DATE, allowNull: true },
     avatar_url: { type: DataTypes.STRING(512), allowNull: true },
-    native_language: { type: DataTypes.STRING(32), allowNull: true },
+    primary_language: {
+      type: DataTypes.STRING(32),
+      allowNull: true,
+      comment: 'Required for tele_sales and senior. Determines lead routing.',
+      validate: {
+        isIn: {
+          args: [['english', 'tamil', 'telugu', 'hindi', 'marathi', 'gujarati', 'bengali', 'kannada', 'malayalam', 'punjabi']],
+          msg: 'Invalid language',
+        },
+      },
+    },
+    additional_languages: {
+      type: DataTypes.ARRAY(DataTypes.STRING),
+      defaultValue: [],
+      allowNull: false,
+      comment: 'Optional languages this user can occasionally help with. Used as overflow for round robin.',
+    },
     second_language: { type: DataTypes.STRING(32), allowNull: true },
     third_language: { type: DataTypes.STRING(32), allowNull: true },
     gallabox_user_id: { type: DataTypes.STRING(128), allowNull: true },
@@ -92,7 +109,21 @@ User.init(
       { fields: ['role'] },
       { fields: ['is_active'] },
       { fields: ['parent_node_id'] },
+      { fields: ['primary_language'] },
+      { fields: ['additional_languages'], using: 'GIN' },
     ],
+    validate: {
+      primaryLanguageRequired() {
+        if (['tele_sales', 'senior'].includes(this.role) && !this.primary_language) {
+          throw new Error('primary_language is required for tele_sales and senior roles');
+        }
+      },
+      noLanguageDuplicate() {
+        if (this.primary_language && Array.isArray(this.additional_languages) && this.additional_languages.includes(this.primary_language)) {
+          throw new Error('primary_language cannot also appear in additional_languages');
+        }
+      },
+    },
     hooks: {
       beforeCreate: async (user) => {
         if (user.password) {

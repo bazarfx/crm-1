@@ -14,4 +14,7 @@ router.delete('/:id', allowRoles('super_admin', 'admin'), ctl.remove);
 router.post('/:id/members', allowRoles(...STAFF_ADMIN), ctl.addMember);
 router.delete('/:id/members/:userId', allowRoles(...STAFF_ADMIN), ctl.removeMember);
 
+// Atomic move between groups — admin / super_admin only (enforced in controller).
+router.post('/move-member', allowRoles('super_admin', 'admin'), ctl.moveMember);
+
 module.exports = router;

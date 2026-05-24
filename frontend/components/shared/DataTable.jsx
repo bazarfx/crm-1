@@ -97,20 +97,20 @@ export default function DataTable({
   }, [pageCount, pageIndex]);
 
   return (
-    <div className="card p-0 overflow-hidden">
+    <div className="rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden">
       {searchable && (
-        <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-3">
+        <div className="px-4 py-3 border-b flex items-center gap-3">
           <div className="relative flex-1 max-w-sm">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted" />
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
               value={isServer ? serverSearch : localFilter}
               onChange={(e) => (isServer ? setServerSearch(e.target.value) : setLocalFilter(e.target.value))}
               placeholder={searchPlaceholder}
-              className="input pl-9 py-1.5 text-sm"
+              className="w-full h-9 rounded-md border bg-background pl-9 pr-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 transition-shadow"
             />
           </div>
-          <span className="mono text-xs text-ink-muted ml-auto tabular-nums">
-            {loading ? '…' : `${filteredCount ?? 0} row${(filteredCount ?? 0) === 1 ? '' : 's'}`}
+          <span className="mono text-xs text-muted-foreground ml-auto tabular-nums">
+            {loading ? '…' : `${(filteredCount ?? 0).toLocaleString('en-IN')} row${(filteredCount ?? 0) === 1 ? '' : 's'}`}
           </span>
         </div>
       )}
@@ -119,7 +119,7 @@ export default function DataTable({
         <table className="w-full text-sm">
           <thead>
             {table.getHeaderGroups().map((hg) => (
-              <tr key={hg.id} className="bg-surface-alt border-b border-slate-100">
+              <tr key={hg.id} className="bg-muted/40 border-b">
                 {hg.headers.map((h) => {
                   const canSort = h.column.getCanSort();
                   const sorted = h.column.getIsSorted();
@@ -127,8 +127,8 @@ export default function DataTable({
                     <th
                       key={h.id}
                       className={clsx(
-                        'text-left text-[11px] font-semibold text-ink-secondary uppercase tracking-wide px-4 py-2.5 select-none whitespace-nowrap',
-                        canSort && 'cursor-pointer hover:text-ink-primary'
+                        'text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2.5 select-none whitespace-nowrap',
+                        canSort && 'cursor-pointer hover:text-foreground'
                       )}
                       onClick={canSort ? h.column.getToggleSortingHandler() : undefined}
                     >
@@ -137,7 +137,7 @@ export default function DataTable({
                         {canSort && (
                           <ArrowUpDown
                             size={11}
-                            className={clsx(sorted ? 'text-accent' : 'text-ink-muted opacity-60')}
+                            className={clsx(sorted ? 'text-primary' : 'text-muted-foreground opacity-60')}
                           />
                         )}
                       </span>
@@ -150,10 +150,10 @@ export default function DataTable({
           <tbody>
             {loading && (
               Array.from({ length: 5 }).map((_, i) => (
-                <tr key={`sk-${i}`} className="border-b border-slate-50">
+                <tr key={`sk-${i}`} className="border-b last:border-0">
                   {columns.map((_c, j) => (
                     <td key={j} className="px-4 py-3">
-                      <div className="skeleton h-4 w-3/4" />
+                      <div className="shimmer h-4 w-3/4 rounded" />
                     </td>
                   ))}
                 </tr>
@@ -164,9 +164,9 @@ export default function DataTable({
               <tr>
                 <td colSpan={columns.length} className="px-4 py-16 text-center">
                   {emptyState || (
-                    <div className="flex flex-col items-center gap-2 text-ink-muted">
+                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <Inbox size={20} />
-                      <p className="text-sm font-medium text-ink-secondary">No results found</p>
+                      <p className="text-sm font-medium text-foreground">No results found</p>
                       <p className="text-xs">Try adjusting your search or filters.</p>
                     </div>
                   )}
@@ -179,12 +179,12 @@ export default function DataTable({
                 key={row.id}
                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                 className={clsx(
-                  'border-b border-slate-50 transition-colors duration-100',
-                  onRowClick ? 'cursor-pointer hover:bg-surface-alt' : 'hover:bg-surface-alt'
+                  'border-b last:border-0 transition-colors duration-100',
+                  onRowClick ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/40'
                 )}
               >
                 {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-4 py-3 text-ink-primary">
+                  <td key={cell.id} className="px-4 py-3 text-foreground">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}
@@ -195,15 +195,15 @@ export default function DataTable({
       </div>
 
       {!loading && pageCount > 1 && (
-        <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
-          <span className="mono text-xs text-ink-muted tabular-nums">
-            Showing {startRow}–{endRow} of {filteredCount}
+        <div className="px-4 py-3 border-t flex items-center justify-between flex-wrap gap-2">
+          <span className="mono text-xs text-muted-foreground tabular-nums">
+            Showing {startRow.toLocaleString('en-IN')}–{endRow.toLocaleString('en-IN')} of {(filteredCount ?? 0).toLocaleString('en-IN')}
           </span>
           <div className="flex items-center gap-1">
             <button
               onClick={goPrev}
               disabled={!canPrev}
-              className="btn-ghost p-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               aria-label="Previous page"
             >
               <ChevronLeft size={14} />
@@ -213,10 +213,10 @@ export default function DataTable({
                 key={n}
                 onClick={() => (isServer ? onPageChange(n) : table.setPageIndex(n - 1))}
                 className={clsx(
-                  'h-7 min-w-[28px] px-2 rounded-md text-xs font-medium transition-all duration-150 mono tabular-nums',
+                  'h-7 min-w-[28px] px-2 rounded-md text-xs font-medium transition-colors mono tabular-nums',
                   n === pageIndex + 1
-                    ? 'bg-accent text-white'
-                    : 'text-ink-secondary hover:bg-surface-alt'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
                 {n}
@@ -225,7 +225,7 @@ export default function DataTable({
             <button
               onClick={goNext}
               disabled={!canNext}
-              className="btn-ghost p-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border bg-background hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               aria-label="Next page"
             >
               <ChevronRight size={14} />

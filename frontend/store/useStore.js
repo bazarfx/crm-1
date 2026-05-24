@@ -12,13 +12,19 @@ export const useStore = create()(
       config: {},
       permissions: null, // { [permission_key]: 'all'|'own'|'group'|'read'|'none' }
       isSuperAdmin: false,
+      isAdmin: false, // true for both super_admin AND admin — short-circuits permission checks
       isLoading: false,
       hydrated: false,
       configLoaded: false,
       permissionsLoaded: false,
 
-      setUser: (user) => set({ user }),
-      updateUser: (partial) => set((s) => ({ user: s.user ? { ...s.user, ...partial } : s.user })),
+      setUser: (user) => set({
+        user,
+        isSuperAdmin: user?.role === 'super_admin',
+        isAdmin: user?.role === 'super_admin' || user?.role === 'admin',
+      }),
+      updateUser: (partial) =>
+        set((s) => ({ user: s.user ? { ...s.user, ...partial } : s.user })),
       markHydrated: () => set({ hydrated: true }),
 
       login: async (email, password) => {
@@ -30,8 +36,14 @@ export const useStore = create()(
             accessToken: data?.accessToken || data?.access_token,
             refreshToken: data?.refreshToken || data?.refresh_token,
           });
-          set({ user: data?.user || null, isLoading: false });
-          return data?.user || null;
+          const user = data?.user || null;
+          set({
+            user,
+            isSuperAdmin: user?.role === 'super_admin',
+            isAdmin: user?.role === 'super_admin' || user?.role === 'admin',
+            isLoading: false,
+          });
+          return user;
         } catch (err) {
           set({ isLoading: false });
           throw err;
@@ -48,6 +60,7 @@ export const useStore = create()(
           permissions: null,
           permissionsLoaded: false,
           isSuperAdmin: false,
+          isAdmin: false,
         });
         if (typeof window !== 'undefined') window.location.href = '/login';
       },
@@ -64,6 +77,7 @@ export const useStore = create()(
           set({
             permissions: data.permissions || {},
             isSuperAdmin: !!data.is_super_admin,
+            isAdmin: data.role === 'super_admin' || data.role === 'admin',
             permissionsLoaded: true,
           });
           return data.permissions || {};
@@ -74,17 +88,70 @@ export const useStore = create()(
 
       /** Synchronous permission check against the cached map. */
       hasPermission: (key) => {
-        const { isSuperAdmin, permissions } = get();
-        if (isSuperAdmin) return true;
+        const { isSuperAdmin, isAdmin, user, permissions } = get();
+        // BRUTE-FORCE OVERRIDE: super_admin / admin always pass — never gated
+        // by the async permission matrix. Read user.role directly so this
+        // works immediately after rehydration, before fetchPermissions resolves.
+        if (isSuperAdmin || isAdmin) return true;
+        if (user?.role === 'super_admin' || user?.role === 'admin') return true;
         const level = permissions?.[key];
-        return Boolean(level) && level !== 'none';
+        return Boolean(level) && level !== 'none' && level !== false;
+      },
+
+      /**
+       * Looser "can edit?" check. Admin + super_admin always pass without
+       * consulting the permission matrix — they have unrestricted edit access
+       * by design. For other roles, returns true if the level is editing-shaped
+       * ('all' / 'own' / 'group').
+       */
+      canEdit: (key) => {
+        const { isSuperAdmin, isAdmin, permissions } = get();
+        if (isSuperAdmin || isAdmin) return true;
+        const level = permissions?.[key];
+        return level === 'all' || level === 'own' || level === 'group';
       },
 
       /** Returns the level string for a permission key, defaulting to 'none'. */
       permissionLevel: (key) => {
-        const { isSuperAdmin, permissions } = get();
-        if (isSuperAdmin) return 'all';
+        const { isSuperAdmin, isAdmin, user, permissions } = get();
+        if (isSuperAdmin || isAdmin) return 'all';
+        if (user?.role === 'super_admin' || user?.role === 'admin') return 'all';
         return permissions?.[key] || 'none';
+      },
+
+      /** True when the calling user is the assignee on this lead. */
+      isAssignedToMe: (lead) => {
+        const { user } = get();
+        return Boolean(user && lead && String(lead.assigned_to_id) === String(user.id));
+      },
+
+      /**
+       * Lead-scoped edit check (distinct from the permission-key `canEdit`).
+       * Admin / super_admin / floor_manager can always edit; telesellers and
+       * seniors can edit only leads currently assigned to them.
+       */
+      canEditLead: (lead) => {
+        const { isSuperAdmin, isAdmin, user } = get();
+        if (!lead) return false;
+        if (isSuperAdmin || isAdmin) return true;
+        const role = user?.role;
+        // BRUTE-FORCE OVERRIDE: never gate admin / super_admin behind flags
+        if (role === 'super_admin' || role === 'admin') return true;
+        if (role === 'floor_manager') return true;
+        if ((role === 'tele_sales' || role === 'senior')
+            && String(lead.assigned_to_id) === String(user?.id)) return true;
+        return false;
+      },
+
+      /** Only roles that may reassign a lead to a different user. */
+      canReassignLead: () => {
+        const { isSuperAdmin, isAdmin, user, permissions } = get();
+        if (isSuperAdmin || isAdmin) return true;
+        // BRUTE-FORCE OVERRIDE: super_admin / admin always reassign
+        if (user?.role === 'super_admin' || user?.role === 'admin') return true;
+        if (user?.role === 'floor_manager') return true;
+        const level = permissions?.['leads.reassign'];
+        return Boolean(level) && level !== 'none';
       },
 
       fetchConfig: async () => {
@@ -92,9 +159,21 @@ export const useStore = create()(
         set({ isLoading: true });
         try {
           const res = await api.get('/config');
-          const data = unwrap(res) || {};
-          set({ config: data, configLoaded: true, isLoading: false });
-          return data;
+          const data = unwrap(res);
+          // /config returns a flat array of rows. Group them by category so
+          // callers can read e.g. config.lead_status / config.lead_source as
+          // arrays without each page rebuilding the grouping itself.
+          let grouped = {};
+          if (Array.isArray(data)) {
+            for (const row of data) {
+              if (!row?.category) continue;
+              (grouped[row.category] ||= []).push(row);
+            }
+          } else if (data && typeof data === 'object') {
+            grouped = data;
+          }
+          set({ config: grouped, configLoaded: true, isLoading: false });
+          return grouped;
         } catch {
           set({ isLoading: false });
           return get().config;
@@ -117,7 +196,28 @@ export const useStore = create()(
         typeof window !== 'undefined' ? window.localStorage : undefined
       ),
       partialize: (s) => ({ user: s.user }),
-      onRehydrateStorage: () => (state) => state?.markHydrated?.(),
+      // Rederive admin/super_admin flags from the persisted user.role the
+      // instant the store rehydrates, so detail pages don't render with
+      // canEdit=false on a hard reload while waiting for fetchPermissions.
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          // If the persisted user blob outlived the access token (hardLogout,
+          // wipe in another tab, etc.), drop the user too — otherwise the
+          // login page thinks we're signed in while the dashboard layout
+          // thinks we're not, and the two ping-pong redirect each other.
+          if (typeof window !== 'undefined' && state.user && !getAccessToken()) {
+            state.user = null;
+          }
+          const role = state.user?.role;
+          state.isSuperAdmin = role === 'super_admin';
+          state.isAdmin = role === 'super_admin' || role === 'admin';
+          state.markHydrated?.();
+        }
+      },
     }
   )
 );
+
+// Allow both `import { useStore } from '@/store/useStore'` (existing callers)
+// and `import useStore from '@/store/useStore'` (newer spec).
+export default useStore;

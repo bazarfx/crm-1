@@ -162,7 +162,12 @@
 }
 
 /* ------------------------------------------------------------------
- * Legacy component utility classes — preserved so older pages render
+ * Legacy component utility classes — preserved so older pages render.
+ * These now route to shadcn tokens so dark mode picks them up too —
+ * before this, pages using .card / .input / .btn-ghost stayed white in
+ * dark mode while neighboring shadcn components flipped, producing the
+ * "half-light, half-dark" effect on the campaigns / groups / reports
+ * pages.
  * ------------------------------------------------------------------ */
 @layer components {
   .btn {
@@ -170,26 +175,26 @@
   }
   .btn:active { transform: scale(0.97); }
   .btn-primary {
-    @apply btn bg-accent text-white hover:bg-accent-hover focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-accent/40;
+    @apply btn bg-primary text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-ring/40;
   }
   .btn-ghost {
-    @apply btn border border-line bg-white text-ink-primary hover:bg-surface-alt;
+    @apply btn border bg-background text-foreground hover:bg-muted;
   }
   .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700;
+    @apply btn bg-destructive text-destructive-foreground hover:bg-destructive/90;
   }
   .input {
-    @apply w-full border border-line rounded-lg px-3 py-2 text-base text-ink-primary bg-white placeholder:text-ink-muted
-           focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all duration-150;
+    @apply w-full border rounded-lg px-3 py-2 text-base text-foreground bg-background placeholder:text-muted-foreground
+           focus:outline-none focus:ring-2 focus:ring-ring/30 focus:border-ring transition-all duration-150;
   }
   .card {
-    @apply bg-white rounded-xl shadow-sm border border-slate-100 p-5;
+    @apply bg-card text-card-foreground rounded-xl shadow-sm border p-5;
   }
   .badge {
     @apply inline-flex items-center text-xs font-medium px-2.5 py-0.5 rounded-full;
   }
   .skeleton {
-    @apply rounded-md bg-slate-200 animate-skeleton;
+    @apply rounded-md bg-muted animate-skeleton;
   }
   .nav-item {
     @apply flex items-center gap-3 px-4 py-2.5 mx-2 rounded-md text-sm font-medium text-sidebar-text

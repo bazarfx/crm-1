@@ -45,7 +45,7 @@ async function setupAdminJS(app, models) {
         options: {
           listProperties: [
             'id', 'first_name', 'last_name', 'phone', 'lead_status',
-            'language', 'lead_owner_id', 'created_at',
+            'language', 'assigned_to_id', 'created_at',
           ],
         },
       },
@@ -55,6 +55,25 @@ async function setupAdminJS(app, models) {
       { resource: models.RoundRobinState },
       { resource: models.AuditLog },
       { resource: models.RefreshToken },
+      {
+        resource: models.DealUndoRequest,
+        options: {
+          listProperties: [
+            'id', 'lead_id', 'requested_by_user_id', 'status',
+            'reviewed_by_user_id', 'reviewed_at', 'created_at',
+          ],
+        },
+      },
+      {
+        resource: models.RoutingRule,
+        options: {
+          listProperties: [
+            'id', 'lead_source', 'language', 'target_type', 'target_id',
+            'position', 'is_active', 'created_at',
+          ],
+        },
+      },
+      { resource: models.RRPointer },
     ],
   });
 
