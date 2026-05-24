@@ -33,7 +33,7 @@ function buildScope(user) {
 }
 
 const INCLUDE_DEAL = [
-  { model: User, as: 'assignedTo', attributes: ['id', 'first_name', 'last_name', 'role', 'primary_language', 'additional_languages'] },
+  { model: User, as: 'assignedTo', attributes: ['id', 'first_name', 'last_name', 'role', 'languages'] },
   { model: User, as: 'closedBy', attributes: ['id', 'first_name', 'last_name', 'role'] },
   { model: Group, as: 'group', attributes: ['id', 'name', 'language'] },
   { model: Campaign, as: 'campaign', attributes: ['id', 'name', 'language'] },

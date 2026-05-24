@@ -65,7 +65,7 @@ const buildScope = (user) => {
 };
 
 const INCLUDE_ASSIGNEE = [
-  { model: User, as: 'assignedTo', attributes: ['id', 'first_name', 'last_name', 'email', 'primary_language', 'additional_languages', 'role'] },
+  { model: User, as: 'assignedTo', attributes: ['id', 'first_name', 'last_name', 'email', 'languages', 'role'] },
   { model: Group, as: 'group', attributes: ['id', 'name', 'language'] },
   { model: Campaign, as: 'campaign', attributes: ['id', 'name', 'language'] },
 ];
@@ -206,11 +206,17 @@ async function create(req, res) {
       if (assignment.campaign_id && !body.campaign_id) body.campaign_id = assignment.campaign_id;
       if (assignment.campaign_name && !body.campaign_name) body.campaign_name = assignment.campaign_name;
       assignmentReason = assignment.reason;
+      if (!body.lead_status) body.lead_status = 'new';
     } catch (e) {
-      return error(res, `Cannot create lead — ${e.message}`, 503);
+      // No matching agent anywhere — still create the lead, mark it
+      // unassigned so admin can pick it up via /leads?lead_status=unassigned.
+      body.assigned_to_id = null;
+      body.lead_status = 'unassigned';
+      assignmentReason = `no auto-assign target (${e.message})`;
     }
   } else {
     assignmentReason = 'caller-supplied assignee';
+    if (!body.lead_status) body.lead_status = 'new';
   }
 
   const lead = await Lead.create(body);
@@ -801,8 +807,124 @@ async function exportCsv(req, res) {
   return res.send(csv);
 }
 
+// ─── Unassigned summary ──────────────────────────────────────────────────
+// Snapshot of leads waiting for manual assignment — admins/floor managers
+// use it to dispatch leads that the round-robin couldn't route.
+async function unassignedSummary(req, res) {
+  const where = {
+    [Op.or]: [{ assigned_to_id: null }, { lead_status: 'unassigned' }],
+  };
+
+  const totalCount = await Lead.count({ where });
+
+  const byLanguage = await Lead.findAll({
+    where,
+    attributes: [
+      'language',
+      'lead_source',
+      [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+    ],
+    group: ['language', 'lead_source'],
+    raw: true,
+  });
+
+  const oldest = await Lead.findOne({
+    where,
+    order: [['created_at', 'ASC']],
+    attributes: ['id', 'first_name', 'last_name', 'createdAt', 'language'],
+  });
+
+  const oldestCreatedAt = oldest ? (oldest.createdAt || oldest.get?.('createdAt')) : null;
+
+  return success(res, {
+    total: totalCount,
+    by_language: byLanguage.map((r) => ({
+      language: r.language,
+      lead_source: r.lead_source,
+      count: parseInt(r.count, 10),
+    })),
+    oldest_lead: oldest
+      ? {
+        id: oldest.id,
+        name: `${oldest.first_name || ''} ${oldest.last_name || ''}`.trim(),
+        language: oldest.language,
+        created_at: oldestCreatedAt,
+        age_hours: oldestCreatedAt
+          ? Math.floor((Date.now() - new Date(oldestCreatedAt).getTime()) / (1000 * 60 * 60))
+          : null,
+      }
+      : null,
+  });
+}
+
+// ─── Bulk-assign ─────────────────────────────────────────────────────────
+async function bulkAssign(req, res) {
+  if (!['super_admin', 'admin', 'floor_manager'].includes(req.user.role)) {
+    return error(res, 'Only admin / floor manager can bulk-assign', 403);
+  }
+
+  const { lead_ids, new_assignee_id, run_round_robin } = req.body || {};
+  if (!Array.isArray(lead_ids) || lead_ids.length === 0) {
+    return error(res, 'lead_ids must be a non-empty array', 400);
+  }
+
+  const leads = await Lead.findAll({ where: { id: { [Op.in]: lead_ids } } });
+  if (leads.length === 0) return error(res, 'No leads found', 404);
+
+  const results = [];
+
+  if (run_round_robin) {
+    const { assignToTeleseller, assignToSenior } = require('../utils/leadAssignment');
+    for (const lead of leads) {
+      const isDirect = lead.lead_source === 'direct_ark';
+      const { assignee } = isDirect
+        ? await assignToSenior(lead.language)
+        : await assignToTeleseller(lead.language, lead.group_id);
+      if (assignee) {
+        await lead.update({ assigned_to_id: assignee.id, lead_status: 'new' });
+        results.push({
+          lead_id: lead.id,
+          assigned_to: `${assignee.first_name} ${assignee.last_name}`.trim(),
+          status: 'ok',
+        });
+      } else {
+        results.push({ lead_id: lead.id, assigned_to: null, status: 'no_match' });
+      }
+    }
+  } else if (new_assignee_id) {
+    const assignee = await User.findByPk(new_assignee_id);
+    if (!assignee) return error(res, 'Assignee not found', 404);
+    if (!assignee.is_active) return error(res, 'Cannot assign to inactive user', 400);
+
+    for (const lead of leads) {
+      const langMatch = (assignee.languages || []).includes(lead.language);
+      await lead.update({ assigned_to_id: assignee.id, lead_status: 'new' });
+      results.push({
+        lead_id: lead.id,
+        assigned_to: `${assignee.first_name} ${assignee.last_name}`.trim(),
+        status: 'ok',
+        language_match: langMatch,
+      });
+    }
+  } else {
+    return error(res, 'Either new_assignee_id or run_round_robin: true is required', 400);
+  }
+
+  await AuditLog.create({
+    user_id: req.user.id,
+    action: 'BULK_ASSIGN_LEADS',
+    resource: 'Lead',
+    new_data: { count: results.length, results, run_round_robin: !!run_round_robin },
+    ip_address: req.ip,
+  }).catch(() => {});
+
+  const okCount = results.filter((r) => r.status === 'ok').length;
+  return success(res, { results, total: results.length }, `${okCount} leads assigned`);
+}
+
 module.exports = {
   list, getOne, create, update, updateStatus, assign, reassign,
   softDelete, remove: softDelete, addActivity, getActivities,
   addNote, logCall, exportCsv, reassignmentsFromMe,
+  unassignedSummary, bulkAssign,
 };

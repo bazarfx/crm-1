@@ -215,9 +215,8 @@ function RoutingContent() {
               <li>Admin rules for exact (source, language) — round-robin across this list.</li>
               <li>Admin rules for (source, any language) — round-robin across this list.</li>
               <li>Active telesales groups whose language matches — RR across groups, then within.</li>
-              <li>Telesellers whose <span className="font-mono">primary_language</span> matches — RR direct.</li>
-              <li>Telesellers with the language in <span className="font-mono">additional_languages</span> — overflow RR.</li>
-              <li>Final fallback — round-robin across every active teleseller.</li>
+              <li>Telesellers whose <span className="font-mono">languages</span> array contains the lead's language — RR direct.</li>
+              <li>No language match? Lead is created with status <span className="font-mono">unassigned</span> for manual dispatch.</li>
             </ol>
           </div>
         </CardContent>
@@ -294,7 +293,7 @@ function RoutingContent() {
                                   {r.target_type}
                                   {isGroup && r.target?.language && ` · ${r.target.language}`}
                                   {!isGroup && r.target?.role && ` · ${r.target.role.replace(/_/g, ' ')}`}
-                                  {!isGroup && r.target?.primary_language && ` · ${r.target.primary_language}`}
+                                  {!isGroup && Array.isArray(r.target?.languages) && r.target.languages.length > 0 && ` · ${r.target.languages.join(', ')}`}
                                 </p>
                               </div>
                             </div>
@@ -461,7 +460,9 @@ function RoutingContent() {
                       : targets.users.map((u) => (
                           <SelectItem key={u.id} value={u.id}>
                             {u.first_name} {u.last_name}
-                            {u.primary_language && <span className="text-muted-foreground"> · {u.primary_language}</span>}
+                            {Array.isArray(u.languages) && u.languages.length > 0 && (
+                              <span className="text-muted-foreground"> · {u.languages.join(', ')}</span>
+                            )}
                             {u.role && <span className="text-muted-foreground"> · {u.role.replace(/_/g, ' ')}</span>}
                           </SelectItem>
                         ))}

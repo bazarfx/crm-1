@@ -28,7 +28,7 @@ async function hydrate(rules) {
     userIds.length
       ? User.findAll({
           where: { id: { [Op.in]: userIds } },
-          attributes: ['id', 'first_name', 'last_name', 'role', 'primary_language', 'additional_languages', 'is_active'],
+          attributes: ['id', 'first_name', 'last_name', 'role', 'languages', 'is_active'],
           paranoid: false,
         })
       : [],
@@ -249,7 +249,7 @@ async function targetOptions(req, res) {
     }),
     User.findAll({
       where: { is_active: true, role: { [Op.in]: ['tele_sales', 'senior'] } },
-      attributes: ['id', 'first_name', 'last_name', 'role', 'primary_language', 'additional_languages'],
+      attributes: ['id', 'first_name', 'last_name', 'role', 'languages'],
       order: [['first_name', 'ASC']],
     }),
   ]);

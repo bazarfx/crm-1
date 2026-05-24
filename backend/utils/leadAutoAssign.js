@@ -9,9 +9,12 @@ const { routeLead } = require('../services/leadRouter');
  *   1. Admin RoutingRule for (lead_source, language) — RR across rules
  *   2. Admin RoutingRule for (lead_source, *)        — RR across rules
  *   3. Telesales groups whose language matches       — RR group → RR member
- *   4. Telesellers whose primary_language matches    — RR direct
- *      (falls back to additional_languages overflow if no primary match)
- *   5. Any active teleseller                         — RR final fallback
+ *   4. Telesellers whose languages array contains it — RR direct
+ *
+ * If none match, the router throws — callers create the lead as
+ * `unassigned` so an admin can dispatch manually. There is no longer
+ * an "any teleseller" fallback: routing a lead to an agent who doesn't
+ * speak its language is worse than parking it.
  *
  * The caller can short-circuit step 1-5 by passing `group_id` directly —
  * useful for callers that already resolved a group (legacy ingest path).

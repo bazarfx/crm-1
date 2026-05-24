@@ -104,29 +104,29 @@ export default function FilterDrawer({ open, onClose, value, onApply, campaigns 
     return list;
   }, [allSources, role]);
 
-  // For tele_sales / senior, their leads come in their primary language plus
-  // any additional_languages they've opted into for overflow. Collapse the
-  // filter to that union so the drawer reflects what's actually in scope.
+  // For tele_sales / senior, the filter only needs to show the languages
+  // they actually speak — leads outside that set will never be theirs.
+  // Admins / floor managers keep the full list since they triage across all.
+  const userLangs = useMemo(
+    () => (Array.isArray(user?.languages) ? user.languages.map((l) => (l || '').toLowerCase()) : []),
+    [user?.languages],
+  );
   const languages = useMemo(() => {
     if (!['tele_sales', 'senior'].includes(role)) return allLanguages;
-    const primary = (user?.primary_language || '').toLowerCase();
-    if (!primary) return allLanguages;
-    const allowed = new Set([primary, ...((user?.additional_languages || []).map((l) => (l || '').toLowerCase()))]);
+    if (userLangs.length === 0) return allLanguages;
+    const allowed = new Set(userLangs);
     const filtered = allLanguages.filter((l) => allowed.has(l.value.toLowerCase()));
     return filtered.length ? filtered : allLanguages;
-  }, [allLanguages, role, user?.primary_language, user?.additional_languages]);
+  }, [allLanguages, role, userLangs]);
 
-  // Same idea for campaigns: telesellers + seniors only handle leads from
-  // campaigns matching their primary or one of their additional languages.
-  // Floor managers and admins keep the full list because they triage across
-  // languages.
+  // Same idea for campaigns: telesellers + seniors only see campaigns whose
+  // language is one they speak.
   const visibleCampaigns = useMemo(() => {
     if (!['tele_sales', 'senior'].includes(role)) return campaigns;
-    const primary = (user?.primary_language || '').toLowerCase();
-    if (!primary) return campaigns;
-    const allowed = new Set([primary, ...((user?.additional_languages || []).map((l) => (l || '').toLowerCase()))]);
+    if (userLangs.length === 0) return campaigns;
+    const allowed = new Set(userLangs);
     return campaigns.filter((c) => !c.language || allowed.has(c.language.toLowerCase()));
-  }, [campaigns, role, user?.primary_language, user?.additional_languages]);
+  }, [campaigns, role, userLangs]);
 
   // Hide whole sections that would only ever present a single forced choice —
   // a one-option "filter" is just noise.

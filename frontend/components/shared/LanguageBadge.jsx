@@ -4,8 +4,8 @@ import { cn } from '@/lib/utils';
 import { colorsFor, labelFor } from '@/lib/languages';
 
 /**
- * Single language pill. `primary` bumps the weight; `size="xs"` is for the
- * "+ other languages" overflow tags so they read as secondary.
+ * Single language pill. `size="xs"` for compact overflow tags; `primary`
+ * bumps font weight when one chip needs to read louder than its siblings.
  */
 export function LanguageBadge({ language, size = 'sm', primary = false, className }) {
   if (!language) return <span className="text-muted-foreground text-xs">—</span>;
@@ -26,24 +26,22 @@ export function LanguageBadge({ language, size = 'sm', primary = false, classNam
 }
 
 /**
- * Compound: primary language + optional list of additional languages.
- * Hides the "+" separator if there's nothing on either side.
+ * Row of language chips. Pass the `languages` array (e.g. from
+ * user.languages); shows up to `max`, then "+N" overflow.
  */
-export function LanguageList({ primary, additional = [], size = 'sm', className }) {
-  const extras = (additional || []).filter((l) => l && l !== primary);
-  if (!primary && extras.length === 0) {
-    return <span className="text-muted-foreground text-xs">—</span>;
+export function LanguageList({ languages = [], size = 'sm', max = 4, className }) {
+  if (!Array.isArray(languages) || languages.length === 0) {
+    return <span className="text-muted-foreground text-[10px]">No languages</span>;
   }
+  const visible = languages.slice(0, max);
+  const hiddenCount = languages.length - visible.length;
   return (
     <div className={cn('inline-flex items-center gap-1 flex-wrap', className)}>
-      {primary && <LanguageBadge language={primary} primary size={size} />}
-      {extras.length > 0 && (
-        <>
-          {primary && <span className="text-muted-foreground text-[9px]">+</span>}
-          {extras.map((l) => (
-            <LanguageBadge key={l} language={l} size="xs" />
-          ))}
-        </>
+      {visible.map((l) => (
+        <LanguageBadge key={l} language={l} size={size} />
+      ))}
+      {hiddenCount > 0 && (
+        <span className="text-[9px] text-muted-foreground">+{hiddenCount}</span>
       )}
     </div>
   );

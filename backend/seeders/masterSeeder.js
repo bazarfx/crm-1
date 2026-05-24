@@ -114,7 +114,7 @@ async function seedUsers() {
   for (const lang of LANGUAGES) {
     users.push({
       first_name: 'FloorMgr', last_name: lang, email: `fm_${lang.toLowerCase()}@thework.ltd`,
-      password: PASSWORD, role: 'floor_manager', native_language: lang, is_active: true,
+      password: PASSWORD, role: 'floor_manager', languages: [lang], is_active: true,
     });
   }
   for (const lang of LANGUAGES) {
@@ -122,7 +122,7 @@ async function seedUsers() {
       users.push({
         first_name: 'Senior', last_name: `${lang}${i}`,
         email: `senior_${lang.toLowerCase()}${i}@thework.ltd`,
-        password: PASSWORD, role: 'senior', native_language: lang, is_active: true,
+        password: PASSWORD, role: 'senior', languages: [lang], is_active: true,
       });
     }
   }
@@ -134,7 +134,7 @@ async function seedUsers() {
       users.push({
         first_name: fn, last_name: ln,
         email: `agent_${fn.toLowerCase()}_${i}_${faker.string.alphanumeric(4).toLowerCase()}@thework.ltd`,
-        password: PASSWORD, role: 'tele_sales', native_language: lang, alias: `${fn} ${ln[0]}.`,
+        password: PASSWORD, role: 'tele_sales', languages: [lang], alias: `${fn} ${ln[0]}.`,
         is_active: true,
       });
     }
@@ -185,7 +185,9 @@ async function seedGroupMembers(users, groups) {
   const memberships = [];
   for (const group of groups) {
     const role = group.type === 'telesales' ? 'tele_sales' : 'senior';
-    const matches = users.filter((u) => u.role === role && u.native_language === group.language);
+    const matches = users.filter(
+      (u) => u.role === role && Array.isArray(u.languages) && u.languages.includes(group.language),
+    );
     matches.forEach((u, idx) => {
       memberships.push({ group_id: group.id, user_id: u.id, rr_index: idx, is_active: true });
     });
@@ -259,7 +261,9 @@ async function seedLeads(users, groups, campaigns) {
 
   for (let i = 0; i < N; i++) {
     const lang = faker.helpers.arrayElement(LANGUAGES);
-    const langTelesales = telesales.filter((t) => t.native_language === lang);
+    const langTelesales = telesales.filter(
+      (t) => Array.isArray(t.languages) && t.languages.includes(lang),
+    );
     const owner = faker.helpers.arrayElement(langTelesales);
     const campaign = faker.helpers.arrayElement(campaigns.filter((c) => c.language === lang)) ||
       faker.helpers.arrayElement(campaigns);

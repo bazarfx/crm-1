@@ -2,6 +2,7 @@ const { sequelize, Lead, LeadActivity, ArkWebhookLog, User } = require('../model
 const { success, error } = require('../utils/responseHelper');
 const { verifyArkWebhook, clientIp } = require('../utils/webhookVerifier');
 const { buildCloserSnapshot } = require('../utils/dealAttribution');
+const { assignToSenior } = require('../utils/leadAssignment');
 
 function detectEventType(payload) {
   const direct = payload?.event_type || payload?.event || payload?.type;
@@ -34,7 +35,8 @@ async function ark(req, res) {
   }
 
   const arkUsername = pick(payload, 'ARK_Username', 'ark_username', 'username', 'phone');
-  const arkAccount = pick(payload, 'ARK_AccountNumber', 'ark_account_number', 'account_number');
+  const arkAccount = pick(payload, 'ARK_AccountNumber', 'ARK_Account_Number', 'ark_account_number', 'account_number');
+  const arkUid = pick(payload, 'ark_uid', 'uid');
   const eventType = detectEventType(payload);
 
   // Match lead by phone === ARK_Username (per CLAUDE.md)
@@ -43,16 +45,127 @@ async function ark(req, res) {
     : null;
 
   if (!lead) {
-    await ArkWebhookLog.create({
-      raw_payload: payload,
-      ark_username: arkUsername,
-      ark_account_number: arkAccount,
-      event_type: eventType,
-      match_status: 'unmatched',
-      processed_at: new Date(),
-      ip_address: ip,
-    });
-    return success(res, { matched: false }, 'Logged — unmatched', 202);
+    // No existing lead found — treat this as a direct ARK signup. Create a
+    // new lead with lead_source='direct_ark' and route it to a senior via
+    // the language-scoped round robin. If no senior speaks the language,
+    // the lead is still created but flagged as 'unassigned' for admin
+    // review (matches the same fail-open behaviour as Meta Ads ingest).
+    const fullName = pick(payload, 'Name', 'name', 'full_name', 'customer_name') || '';
+    const [firstName, ...rest] = String(fullName || 'Direct ARK Client').split(/\s+/);
+    const lastName = rest.join(' ') || '';
+    const language = pick(payload, 'language', 'Language') || 'english';
+    const location = pick(payload, 'location', 'city', 'Location');
+    const accountOpenedAt = pick(
+      payload,
+      'Account_Opened_DateTime', 'account_opened_date', 'Account_Opened_Date',
+    );
+    const ftdAt = pick(payload, 'Ftd_DateTime', 'ftd_at', 'ftd_date');
+    const depositAmount = pick(payload, 'deposited_amount', 'amount');
+    const lastTermActivity = pick(payload, 'last_terminal_activity', 'Last_Terminal_Activity');
+
+    const { assignee: senior, error: assignErr, candidates } =
+      await assignToSenior(language);
+
+    const tx2 = await sequelize.transaction();
+    try {
+      const newLead = await Lead.create(
+        {
+          first_name: firstName || 'Direct',
+          last_name: lastName || 'ARK Client',
+          phone: arkUsername ? String(arkUsername) : null,
+          ark_username: arkUsername || null,
+          ark_account_number: arkAccount || null,
+          ark_uid: arkUid || null,
+          account_opened_at: accountOpenedAt ? new Date(accountOpenedAt) : new Date(),
+          account_opened_date: accountOpenedAt ? new Date(accountOpenedAt) : new Date(),
+          last_terminal_activity_at: lastTermActivity ? new Date(lastTermActivity) : null,
+          lead_status: senior ? (ftdAt ? 'ftd_done' : 'account_opened') : 'unassigned',
+          lead_source: 'direct_ark',
+          department: 'tele_sales',
+          assigned_to_id: senior?.id || null,
+          group_id: null,
+          campaign_id: null,
+          campaign_name: 'Direct ARK Signup',
+          city: location || null,
+          ftd_at: ftdAt ? new Date(ftdAt) : null,
+          deposited_amount: depositAmount || null,
+          language,
+          preferred_language: language,
+          total_attempted_call_count: 0,
+          ark_raw: payload,
+        },
+        { transaction: tx2 },
+      );
+
+      const sysUserId = await getSystemUserId();
+      await LeadActivity.create(
+        {
+          lead_id: newLead.id,
+          user_id: senior?.id || sysUserId,
+          activity_type: senior ? 'created' : 'unassigned',
+          title: senior
+            ? `Direct ARK client assigned to senior (${language})`
+            : `Direct ARK client created without assignee (${language})`,
+          description: senior
+            ? `Senior ${senior.first_name} ${senior.last_name} assigned via round robin (${candidates} candidates).`
+            : `No active senior speaks ${language}. Reason: ${assignErr}. Admin must manually assign.`,
+          metadata: payload,
+        },
+        { transaction: tx2 },
+      );
+
+      await ArkWebhookLog.create(
+        {
+          raw_payload: payload,
+          ark_username: arkUsername,
+          ark_account_number: arkAccount,
+          event_type: eventType,
+          matched_lead_id: newLead.id,
+          // Reuse 'matched' — the log now has a matched_lead_id (the lead we
+          // just created). The activity log records whether assignment
+          // happened. Avoids needing an enum migration.
+          match_status: 'matched',
+          processed_at: new Date(),
+          ip_address: ip,
+        },
+        { transaction: tx2 },
+      );
+
+      await tx2.commit();
+      return success(
+        res,
+        {
+          matched: false,
+          created: true,
+          lead_id: newLead.id,
+          assigned: !!senior,
+          assigned_to: senior
+            ? { id: senior.id, name: `${senior.first_name} ${senior.last_name}`.trim() }
+            : null,
+          language,
+          candidates,
+          lead_source: 'direct_ark',
+          reason: assignErr || null,
+        },
+        senior
+          ? 'Direct ARK client created and assigned to senior'
+          : 'Direct ARK client created but no matching senior — needs manual assignment',
+        201,
+      );
+    } catch (e) {
+      await tx2.rollback();
+      await ArkWebhookLog.create({
+        raw_payload: payload,
+        ark_username: arkUsername,
+        ark_account_number: arkAccount,
+        event_type: eventType,
+        match_status: 'error',
+        processed_at: new Date(),
+        error_message: e.message,
+        ip_address: ip,
+      });
+      return error(res, `Direct ARK create failed: ${e.message}`, 500);
+    }
   }
 
   const tx = await sequelize.transaction();

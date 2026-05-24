@@ -227,13 +227,16 @@ function ActivityLogsContent() {
         </span>
       );
     }
-    if (log.action === 'CHANGE_USER_LANGUAGE') {
+    if (log.action === 'CHANGE_USER_LANGUAGE' || log.action === 'CHANGE_USER_LANGUAGES') {
+      const oldList = Array.isArray(log.old_data?.languages) ? log.old_data.languages : [];
+      const newList = Array.isArray(log.new_data?.languages) ? log.new_data.languages : [];
+      const fmt = (arr) => (arr.length ? arr.join(', ') : '—');
       return (
         <span className="text-xs flex items-center gap-1.5 flex-wrap">
-          <Badge variant="outline" className="text-[10px]">{log.old_data?.primary_language || '—'}</Badge>
+          <Badge variant="outline" className="text-[10px]">{fmt(oldList)}</Badge>
           <span>→</span>
           <Badge variant="outline" className="text-[10px] text-purple-600 dark:text-purple-400 border-purple-500/30">
-            {log.new_data?.primary_language || '—'}
+            {fmt(newList)}
           </Badge>
         </span>
       );

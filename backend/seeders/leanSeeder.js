@@ -19,6 +19,15 @@ const {
   ArkWebhookLog,
 } = require('../models');
 const { seedRolePermissions } = require('./seedRolePermissions');
+const { assignToTeleseller, assignToSenior } = require('../utils/leadAssignment');
+const {
+  RRPointer,
+  RolePermission,
+  UserPermission,
+  RoutingRule,
+  DealUndoRequest,
+  Setting,
+} = require('../models');
 
 faker.seed(20260521);
 
@@ -35,13 +44,21 @@ async function run() {
   await AuditLog.destroy({ where: {}, force: true });
   await IngestLog.destroy({ where: {}, force: true });
   await ArkWebhookLog.destroy({ where: {}, force: true });
+  await DealUndoRequest.destroy({ where: {}, force: true, paranoid: false });
   await Lead.destroy({ where: {}, force: true, paranoid: false });
   await CampaignGroupAssignment.destroy({ where: {}, force: true });
   await Campaign.destroy({ where: {}, force: true, paranoid: false });
   await RoundRobinState.destroy({ where: {}, force: true });
+  await RRPointer.destroy({ where: {}, force: true });
   await GroupMember.destroy({ where: {}, force: true, paranoid: false });
   await Group.destroy({ where: {}, force: true, paranoid: false });
   await RefreshToken.destroy({ where: {}, force: true, paranoid: false });
+  await UserPermission.destroy({ where: {}, force: true });
+  await RoutingRule.destroy({ where: {}, force: true, paranoid: false });
+  // RolePermission rows reference users via updated_by — clear before users.
+  await RolePermission.destroy({ where: {}, force: true });
+  // Setting also references users via updated_by — clear before users.
+  await Setting.destroy({ where: {}, force: true });
   await User.destroy({ where: {}, force: true, paranoid: false });
   await Config.destroy({ where: {}, force: true, paranoid: false });
 
@@ -55,6 +72,7 @@ async function run() {
     { category: 'lead_source', key: 'facebook_ads',  label: 'Facebook Ads',       sort_order: 1 },
     { category: 'lead_source', key: 'instagram_ads', label: 'Instagram Ads',      sort_order: 2 },
     { category: 'lead_source', key: 'direct_ark',    label: 'Direct ARK Signup',  sort_order: 99 },
+    { category: 'lead_status', key: 'unassigned',     label: 'Unassigned',     sort_order: 0, color: '#F59E0B' },
     { category: 'lead_status', key: 'new',            label: 'New',            sort_order: 1, color: '#6366F1' },
     { category: 'lead_status', key: 'contacted',      label: 'Contacted',      sort_order: 2, color: '#3B82F6' },
     { category: 'lead_status', key: 'interested',     label: 'Interested',     sort_order: 3, color: '#8B5CF6' },
@@ -71,18 +89,18 @@ async function run() {
 
   console.log('Seeding users...');
   const userDefs = [
-    { first_name: 'Super',   last_name: 'Admin',   email: 'superadmin@thework.ltd',  role: 'super_admin',   primary_language: 'english', additional_languages: [],                    department: 'management' },
-    { first_name: 'Admin',   last_name: 'One',     email: 'admin@thework.ltd',       role: 'admin',         primary_language: 'english', additional_languages: [],                    department: 'management' },
-    { first_name: 'Floor',   last_name: 'Manager', email: 'fm@thework.ltd',          role: 'floor_manager', primary_language: 'english', additional_languages: ['tamil', 'hindi'],    department: 'tele_sales' },
-    { first_name: 'Senior',  last_name: 'Tamil',   email: 'senior1@thework.ltd',     role: 'senior',        primary_language: 'tamil',   additional_languages: [],                    department: 'tele_sales' },
-    { first_name: 'Senior',  last_name: 'English', email: 'senior2@thework.ltd',     role: 'senior',        primary_language: 'english', additional_languages: ['hindi'],             department: 'tele_sales' },
-    { first_name: 'Back',    last_name: 'Office',  email: 'backoffice@thework.ltd',  role: 'back_office',   primary_language: 'english', additional_languages: [],                    department: 'operations' },
-    { first_name: 'Audit',   last_name: 'User',    email: 'auditor@thework.ltd',     role: 'auditor',       primary_language: 'english', additional_languages: [],                    department: 'operations' },
-    { first_name: 'Priya',   last_name: 'Krishnan',email: 'priya@thework.ltd',       role: 'tele_sales',    primary_language: 'tamil',   additional_languages: [],                    department: 'tele_sales' },
-    { first_name: 'Karthik', last_name: 'Subramanian', email: 'karthik@thework.ltd', role: 'tele_sales',    primary_language: 'tamil',   additional_languages: ['english'],           department: 'tele_sales' },
-    { first_name: 'Raj',     last_name: 'Sharma',  email: 'raj@thework.ltd',         role: 'tele_sales',    primary_language: 'hindi',   additional_languages: [],                    department: 'tele_sales' },
-    { first_name: 'Amit',    last_name: 'Patel',   email: 'amit@thework.ltd',        role: 'tele_sales',    primary_language: 'english', additional_languages: ['hindi'],             department: 'tele_sales' },
-    { first_name: 'Lakshmi', last_name: 'Reddy',   email: 'lakshmi@thework.ltd',     role: 'tele_sales',    primary_language: 'telugu',  additional_languages: [],                    department: 'tele_sales' },
+    { first_name: 'Super',   last_name: 'Admin',       email: 'superadmin@thework.ltd', role: 'super_admin',   languages: ['english'],                 department: 'management' },
+    { first_name: 'Admin',   last_name: 'One',         email: 'admin@thework.ltd',      role: 'admin',         languages: ['english'],                 department: 'management' },
+    { first_name: 'Floor',   last_name: 'Manager',     email: 'fm@thework.ltd',         role: 'floor_manager', languages: ['english', 'tamil', 'hindi'], department: 'tele_sales' },
+    { first_name: 'Senior',  last_name: 'Tamil',       email: 'senior1@thework.ltd',    role: 'senior',        languages: ['tamil'],                   department: 'tele_sales' },
+    { first_name: 'Senior',  last_name: 'English',     email: 'senior2@thework.ltd',    role: 'senior',        languages: ['english', 'hindi'],        department: 'tele_sales' },
+    { first_name: 'Back',    last_name: 'Office',      email: 'backoffice@thework.ltd', role: 'back_office',   languages: ['english'],                 department: 'operations' },
+    { first_name: 'Audit',   last_name: 'User',        email: 'auditor@thework.ltd',    role: 'auditor',       languages: ['english'],                 department: 'operations' },
+    { first_name: 'Priya',   last_name: 'Krishnan',    email: 'priya@thework.ltd',      role: 'tele_sales',    languages: ['tamil'],                   department: 'tele_sales' },
+    { first_name: 'Karthik', last_name: 'Subramanian', email: 'karthik@thework.ltd',    role: 'tele_sales',    languages: ['tamil', 'english'],        department: 'tele_sales' },
+    { first_name: 'Raj',     last_name: 'Sharma',      email: 'raj@thework.ltd',        role: 'tele_sales',    languages: ['hindi'],                   department: 'tele_sales' },
+    { first_name: 'Amit',    last_name: 'Patel',       email: 'amit@thework.ltd',       role: 'tele_sales',    languages: ['english', 'hindi'],        department: 'tele_sales' },
+    { first_name: 'Lakshmi', last_name: 'Reddy',       email: 'lakshmi@thework.ltd',    role: 'tele_sales',    languages: ['telugu'],                  department: 'tele_sales' },
   ];
 
   const users = {};
@@ -91,7 +109,6 @@ async function run() {
       ...def,
       password: PASSWORD,
       is_active: true,
-      additional_languages: def.additional_languages || [],
     });
     users[def.email] = u;
   }
@@ -146,23 +163,17 @@ async function run() {
     { campaign_id: c2.id, group_id: groups.english.id, is_active: true },
   ]);
 
-  console.log('Seeding 8 campaign leads (assigned to telesellers)...');
-  const teleUsers = [
-    users['priya@thework.ltd'],
-    users['karthik@thework.ltd'],
-    users['raj@thework.ltd'],
-    users['amit@thework.ltd'],
-    users['lakshmi@thework.ltd'],
-  ];
+  console.log('Seeding 8 campaign leads via round robin...');
   const statuses = ['new', 'contacted', 'interested', 'call_back', 'account_opened', 'ftd_done', 'cold', 'not_interested'];
   const langs    = ['tamil', 'tamil', 'english', 'hindi', 'telugu', 'tamil', 'english', 'hindi'];
 
   for (let i = 0; i < 8; i++) {
     const lang = langs[i];
     const status = statuses[i];
-    const assignee = teleUsers.find((u) => u.primary_language === lang) || teleUsers[i % teleUsers.length];
     const groupKey = lang in groups ? lang : 'english';
     const campaign = lang === 'tamil' ? c1 : c2;
+
+    const { assignee, candidates } = await assignToTeleseller(lang, groups[groupKey].id);
 
     await Lead.create({
       first_name: faker.person.firstName(),
@@ -172,12 +183,12 @@ async function run() {
       email: faker.internet.email().toLowerCase(),
       language: lang,
       preferred_language: lang,
-      lead_status: status,
+      lead_status: assignee ? status : 'unassigned',
       lead_source: 'facebook_ads',
       department: 'tele_sales',
       trading_experience: 'beginner',
       preferred_market: 'NSE Options',
-      assigned_to_id: assignee.id,
+      assigned_to_id: assignee?.id || null,
       group_id: groups[groupKey].id,
       campaign_id: campaign.id,
       campaign_name: campaign.name,
@@ -190,23 +201,31 @@ async function run() {
       facebook_lead_id: `lean_${Date.now()}_${i}`,
       total_attempted_call_count: status === 'new' ? 0 : faker.number.int({ min: 1, max: 5 }),
     });
+
+    console.log(
+      `  Lead ${i + 1}: ${lang} → ${assignee
+        ? `${assignee.first_name} ${assignee.last_name}`
+        : 'UNASSIGNED'} (${candidates} candidates)`,
+    );
   }
 
-  console.log('Seeding 2 direct ARK leads (assigned to seniors)...');
-  const seniors = [users['senior1@thework.ltd'], users['senior2@thework.ltd']];
+  console.log('Seeding 2 direct ARK leads via senior round robin...');
+  const arkLangs = ['tamil', 'english'];
   for (let i = 0; i < 2; i++) {
-    const senior = seniors[i];
+    const lang = arkLangs[i];
+    const { assignee: senior, candidates } = await assignToSenior(lang);
+
     await Lead.create({
       first_name: faker.person.firstName(),
       last_name: faker.person.lastName(),
       phone: `91${faker.string.numeric(10)}`,
       email: faker.internet.email().toLowerCase(),
-      language: senior.primary_language,
-      preferred_language: senior.primary_language,
-      lead_status: i === 0 ? 'account_opened' : 'ftd_done',
+      language: lang,
+      preferred_language: lang,
+      lead_status: senior ? (i === 1 ? 'ftd_done' : 'account_opened') : 'unassigned',
       lead_source: 'direct_ark',
       department: 'tele_sales',
-      assigned_to_id: senior.id,
+      assigned_to_id: senior?.id || null,
       group_id: null,
       campaign_id: null,
       campaign_name: 'Direct ARK Signup',
@@ -218,6 +237,12 @@ async function run() {
       deposited_amount: i === 1 ? faker.number.int({ min: 10000, max: 200000 }) : null,
       total_attempted_call_count: 0,
     });
+
+    console.log(
+      `  Direct ARK ${i + 1}: ${lang} → senior ${senior
+        ? `${senior.first_name} ${senior.last_name}`
+        : 'UNASSIGNED'} (${candidates} candidates)`,
+    );
   }
 
   console.log('Seeding role permissions...');

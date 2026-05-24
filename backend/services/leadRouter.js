@@ -76,41 +76,16 @@ async function languageGroups(language, transaction) {
   });
 }
 
-// ─── Step 4a: telesellers whose primary_language matches ─────────────────
+// ─── Step 4: telesellers whose languages array contains the language ─────
 async function languageTelesellers(language, transaction) {
   if (!language) return [];
   return User.findAll({
     where: {
       role: 'tele_sales',
       is_active: true,
-      primary_language: language,
+      languages: { [Op.contains]: [language] },
     },
-    attributes: ['id', 'first_name', 'last_name', 'primary_language', 'additional_languages', 'role'],
-    order: [['created_at', 'ASC']],
-    transaction,
-  });
-}
-
-// ─── Step 4b: overflow — telesellers with the language in additional_languages
-async function overflowTelesellers(language, transaction) {
-  if (!language) return [];
-  return User.findAll({
-    where: {
-      role: 'tele_sales',
-      is_active: true,
-      additional_languages: { [Op.contains]: [language] },
-    },
-    attributes: ['id', 'first_name', 'last_name', 'primary_language', 'additional_languages', 'role'],
-    order: [['created_at', 'ASC']],
-    transaction,
-  });
-}
-
-// ─── Step 5: any active teleseller, ordered for stable RR ────────────────
-async function anyTelesellers(transaction) {
-  return User.findAll({
-    where: { role: 'tele_sales', is_active: true },
-    attributes: ['id', 'first_name', 'last_name', 'primary_language', 'additional_languages', 'role'],
+    attributes: ['id', 'first_name', 'last_name', 'languages', 'role'],
     order: [['created_at', 'ASC']],
     transaction,
   });
@@ -210,7 +185,7 @@ async function routeLead({ lead_source, language, campaign_id, transaction } = {
       }
     }
 
-    // ─ 4a: telesellers whose primary_language matches — direct RR, no group
+    // ─ 4: telesellers whose languages array contains the language — direct RR
     const langUsers = await languageTelesellers(language, tx);
     if (langUsers.length > 0) {
       const scope = `lang:${language}:users`;
@@ -220,38 +195,16 @@ async function routeLead({ lead_source, language, campaign_id, transaction } = {
         assignee: user,
         group: null,
         group_id: null,
-        reason: `primary-language teleseller (${language})`,
+        reason: `language teleseller (${language})`,
       };
     }
 
-    // ─ 4b: overflow — telesellers who help with this language as additional
-    const overflowUsers = await overflowTelesellers(language, tx);
-    if (overflowUsers.length > 0) {
-      const scope = `lang:${language}:users:overflow`;
-      const user = await pickByRR(scope, overflowUsers, tx);
-      if (!externalTx) await tx.commit();
-      return {
-        assignee: user,
-        group: null,
-        group_id: null,
-        reason: `overflow teleseller (${language} as additional_language)`,
-      };
-    }
-
-    // ─ 5: any active teleseller, ordered RR
-    const anyUsers = await anyTelesellers(tx);
-    if (anyUsers.length > 0) {
-      const user = await pickByRR('any:users', anyUsers, tx);
-      if (!externalTx) await tx.commit();
-      return {
-        assignee: user,
-        group: null,
-        group_id: null,
-        reason: 'fallback — any active teleseller',
-      };
-    }
-
-    throw new Error('No active telesellers anywhere in the system');
+    // No language-aware route matched. Throw — callers (ingest, manual
+    // create) catch this and create the lead as `unassigned` so admin
+    // can dispatch it manually. We do NOT fall back to "any teleseller"
+    // here, because routing a Tamil lead to an English-only agent is
+    // worse than parking it in the unassigned queue.
+    throw new Error(`No active teleseller speaks ${language || 'this language'}`);
   } catch (e) {
     if (!externalTx) await tx.rollback();
     throw e;

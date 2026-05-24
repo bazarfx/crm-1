@@ -22,6 +22,16 @@ router.get(
   ctl.reassignmentsFromMe,
 );
 router.get(
+  '/unassigned/summary',
+  allowRoles('super_admin', 'admin', 'floor_manager'),
+  ctl.unassignedSummary,
+);
+router.post(
+  '/bulk-assign',
+  allowRoles('super_admin', 'admin', 'floor_manager'),
+  ctl.bulkAssign,
+);
+router.get(
   '/:id',
   allowRoles(...STAFF_ADMIN, 'senior', 'tele_sales', 'back_office', 'auditor', 'archive'),
   ctl.getOne,

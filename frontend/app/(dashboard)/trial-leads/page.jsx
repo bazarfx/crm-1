@@ -281,8 +281,7 @@ function TrialLeadsContent() {
                             {lead.assignedTo.first_name} {lead.assignedTo.last_name}
                           </p>
                           <LanguageList
-                            primary={lead.assignedTo.primary_language}
-                            additional={lead.assignedTo.additional_languages}
+                            languages={lead.assignedTo.languages}
                             size="xs"
                           />
                         </div>

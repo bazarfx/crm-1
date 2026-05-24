@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Plus, Download, Filter, Phone, Mail, Copy, CheckCircle2, X } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Plus, Download, Filter, Phone, Mail, Copy, CheckCircle2, X, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -111,18 +111,18 @@ function LeadAssignmentDropdown({ lead, telesellers, onChange, showOverflow }) {
   const assigneeName = assignee
     ? `${assignee.first_name || ''} ${assignee.last_name || ''}`.trim() || '—'
     : '—';
-  const assigneeLang = assignee?.primary_language;
+  const assigneeLangs = Array.isArray(assignee?.languages) ? assignee.languages : [];
+  const assigneeMainLang = assigneeLangs[0] || null;
 
-  // "Overflow" indicator — visible to admins. The assignee's primary differs
-  // from the lead's language but the lead's language IS in their additional
-  // list, meaning RR routed via the overflow path rather than direct.
-  const isOverflow = Boolean(
+  // "Language mismatch" indicator — visible to admins. The lead has a language,
+  // the assignee speaks at least one, but none of them match. Admin override
+  // (e.g. cross-team handoff during staffing gap) — flag so it's visible.
+  const isMismatch = Boolean(
     showOverflow
     && assignee
     && lead.language
-    && assigneeLang
-    && assigneeLang !== lead.language
-    && (assignee.additional_languages || []).includes(lead.language)
+    && assigneeLangs.length > 0
+    && !assigneeLangs.includes(lead.language)
   );
 
   return (
@@ -133,13 +133,16 @@ function LeadAssignmentDropdown({ lead, telesellers, onChange, showOverflow }) {
       >
         <span className="inline-flex items-center gap-1.5 truncate min-w-0">
           <span className="truncate">{assigneeName}</span>
-          {assigneeLang && <LanguageBadge language={assigneeLang} size="xs" />}
-          {isOverflow && (
+          {assigneeMainLang && <LanguageBadge language={assigneeMainLang} size="xs" />}
+          {assigneeLangs.length > 1 && (
+            <span className="text-[9px] text-muted-foreground">+{assigneeLangs.length - 1}</span>
+          )}
+          {isMismatch && (
             <span
-              className="text-[9px] text-amber-600 dark:text-amber-400"
-              title="Assignee's primary language differs from this lead — they took it as overflow."
+              className="text-[9px] text-red-500 dark:text-red-400"
+              title={`Lead is ${lead.language} but assignee doesn't speak it`}
             >
-              overflow
+              !
             </span>
           )}
         </span>
@@ -150,15 +153,19 @@ function LeadAssignmentDropdown({ lead, telesellers, onChange, showOverflow }) {
         ) : (
           telesellers.map((t) => (
             <SelectItem key={t.id} value={t.id}>
-              <div className="flex items-center gap-1.5 min-w-0">
+              <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                 <span className="truncate">{t.first_name} {t.last_name}</span>
                 {t.role === 'senior' && (
                   <span className="text-muted-foreground text-[10px]">(SR)</span>
                 )}
-                {t.primary_language && <LanguageBadge language={t.primary_language} size="xs" />}
-                {t.additional_languages?.length > 0 && (
-                  <span className="text-muted-foreground text-[9px]">
-                    +{t.additional_languages.map(labelFor).join(', ')}
+                {Array.isArray(t.languages) && t.languages.length > 0 && (
+                  <span className="inline-flex items-center gap-1">
+                    {t.languages.slice(0, 3).map((l) => (
+                      <LanguageBadge key={l} language={l} size="xs" />
+                    ))}
+                    {t.languages.length > 3 && (
+                      <span className="text-[9px] text-muted-foreground">+{t.languages.length - 3}</span>
+                    )}
                   </span>
                 )}
               </div>
@@ -179,6 +186,7 @@ const initialAvatar = (name) => {
 
 export default function LeadsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isReadOnly, can, role } = useAuth();
   const hasPermission = useStore((s) => s.hasPermission);
   const config = useStore((s) => s.config);
@@ -215,6 +223,39 @@ export default function LeadsPage() {
   // initial render (and refreshed when filters change so the count reflects
   // the active scope minus the status filter itself). Keyed by status slug.
   const [statusCounts, setStatusCounts] = useState({});
+
+  // Unassigned-bucket state. Admins / floor_managers get a dedicated tab that
+  // pre-applies the `unassigned` status filter, surfaces a triage banner, and
+  // enables row selection so they can bulk-run the round-robin.
+  const showUnassignedTab = isAdminRole || role === 'floor_manager';
+  const [activeTab, setActiveTab] = useState('all');
+  const [unassignedSummary, setUnassignedSummary] = useState({ total: 0 });
+  const [selected, setSelected] = useState(() => new Set());
+
+  const refreshUnassignedSummary = useCallback(() => {
+    if (!showUnassignedTab) return;
+    api.get('/leads/unassigned/summary')
+      .then((res) => setUnassignedSummary(unwrap(res) || { total: 0 }))
+      .catch(() => {});
+  }, [showUnassignedTab]);
+
+  useEffect(() => { refreshUnassignedSummary(); }, [refreshUnassignedSummary]);
+
+  // Deep-link entry from the dashboard banner: ?lead_status=unassigned should
+  // open the Unassigned tab pre-filtered. Only fires once on first render.
+  useEffect(() => {
+    if (!showUnassignedTab) return;
+    const sp = searchParams?.get?.('lead_status');
+    if (sp === 'unassigned') {
+      setActiveTab('unassigned');
+      setFilters((f) => ({ ...f, status: ['unassigned'] }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showUnassignedTab]);
+
+  // Clear selection whenever the data window changes (page, filters, search)
+  // so we never end up with stale ids in the bulk action.
+  useEffect(() => { setSelected(new Set()); }, [page, filters, search, activeTab]);
 
   // Pull the live status list out of config if it's been hydrated, otherwise
   // fall back to the canonical list so the dropdown always has options.
@@ -322,6 +363,68 @@ export default function LeadsPage() {
     })();
   }, [canReassign]);
 
+  const switchTab = (tab) => {
+    if (tab === activeTab) return;
+    setActiveTab(tab);
+    setPage(1);
+    setSelected(new Set());
+    if (tab === 'unassigned') {
+      setFilters((f) => ({ ...f, status: ['unassigned'] }));
+    } else {
+      setFilters((f) => {
+        const next = { ...f };
+        if (Array.isArray(next.status) && next.status.includes('unassigned')) {
+          next.status = next.status.filter((s) => s !== 'unassigned');
+        }
+        return next;
+      });
+    }
+  };
+
+  const handleBulkRoundRobin = async () => {
+    if (selected.size === 0) return;
+    try {
+      const res = await api.post('/leads/bulk-assign', {
+        lead_ids: Array.from(selected),
+        run_round_robin: true,
+      });
+      const results = unwrap(res)?.results || [];
+      const ok = results.filter((r) => r.status === 'ok').length;
+      const noMatch = results.filter((r) => r.status === 'no_match').length;
+      toast.success(
+        `${ok} assigned${noMatch > 0 ? `, ${noMatch} still unassigned (no language match)` : ''}`,
+      );
+      setSelected(new Set());
+      fetchData();
+      refreshUnassignedSummary();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Bulk assign failed');
+    }
+  };
+
+  const handleAssignAllRoundRobin = async () => {
+    try {
+      const list = await api.get('/leads', { params: { status: 'unassigned', limit: 500 } });
+      const ids = (unwrap(list)?.items || []).map((l) => l.id);
+      if (ids.length === 0) {
+        toast('No unassigned leads.');
+        return;
+      }
+      if (!window.confirm(`Run round robin on all ${ids.length} unassigned leads?`)) return;
+      const res = await api.post('/leads/bulk-assign', {
+        lead_ids: ids,
+        run_round_robin: true,
+      });
+      const results = unwrap(res)?.results || [];
+      const ok = results.filter((r) => r.status === 'ok').length;
+      toast.success(`${ok} of ${ids.length} assigned`);
+      fetchData();
+      refreshUnassignedSummary();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed');
+    }
+  };
+
   const exportCsv = async () => {
     try {
       const res = await api.get('/leads/export', { responseType: 'blob', params: { search } });
@@ -343,7 +446,49 @@ export default function LeadsPage() {
   };
 
   const columns = useMemo(() => {
-    const base = [
+    const base = [];
+
+    // Row-selection column — only when the admin is triaging unassigned leads.
+    // Lives outside the standard column set so it disappears cleanly on the
+    // All tab without leaving an empty gutter.
+    if (showUnassignedTab && activeTab === 'unassigned') {
+      base.push({
+        id: '__select',
+        header: () => {
+          const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
+          return (
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={(e) => {
+                if (e.target.checked) setSelected(new Set(rows.map((r) => r.id)));
+                else setSelected(new Set());
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="cursor-pointer"
+              aria-label="Select all visible unassigned leads"
+            />
+          );
+        },
+        cell: ({ row }) => (
+          <input
+            type="checkbox"
+            checked={selected.has(row.original.id)}
+            onChange={(e) => {
+              const next = new Set(selected);
+              if (e.target.checked) next.add(row.original.id);
+              else next.delete(row.original.id);
+              setSelected(next);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="cursor-pointer"
+          />
+        ),
+        enableSorting: false,
+      });
+    }
+
+    base.push(
       {
         accessorKey: 'name',
         header: 'Name',
@@ -415,7 +560,7 @@ export default function LeadsPage() {
           );
         },
       },
-    ];
+    );
 
     if (!isTele) {
       base.push({
@@ -437,13 +582,18 @@ export default function LeadsPage() {
             );
           }
           const a = row.original.assignedTo;
-          const name = a ? `${a.first_name || ''} ${a.last_name || ''}`.trim() : '';
-          const lang = a?.primary_language;
           if (!a) return <span className="text-xs text-muted-foreground">—</span>;
+          const name = `${a.first_name || ''} ${a.last_name || ''}`.trim();
+          const langs = Array.isArray(a.languages) ? a.languages : [];
           return (
-            <span className="inline-flex items-center gap-1.5 text-xs">
+            <span className="inline-flex items-center gap-1.5 text-xs flex-wrap">
               <span className="text-muted-foreground">{name || '—'}</span>
-              {lang && <LanguageBadge language={lang} size="xs" />}
+              {langs.slice(0, 2).map((l) => (
+                <LanguageBadge key={l} language={l} size="xs" />
+              ))}
+              {langs.length > 2 && (
+                <span className="text-[9px] text-muted-foreground">+{langs.length - 2}</span>
+              )}
             </span>
           );
         },
@@ -483,7 +633,10 @@ export default function LeadsPage() {
     );
 
     return base;
-  }, [isTele, canChangeStatus, canReassign, statuses, telesellers, fetchData]);
+  }, [
+    isTele, canChangeStatus, canReassign, statuses, telesellers, fetchData,
+    showUnassignedTab, activeTab, rows, selected,
+  ]);
 
   // Action-bar level layout: topbar already shows the page title + subtitle,
   // so we don't repeat the "Leads" h2 here. Instead we lead with the row
@@ -520,6 +673,43 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-4">
+      {/* Bucket tabs — only for admins / floor managers. The Unassigned tab
+          forces the status filter to `unassigned` and exposes the bulk-RR
+          toolbar; switching back to All clears that filter. */}
+      {showUnassignedTab && (
+        <div className="flex items-center gap-2 border-b">
+          <button
+            type="button"
+            onClick={() => switchTab('all')}
+            className={cn(
+              'px-4 py-2 text-sm border-b-2 transition-colors -mb-px',
+              activeTab === 'all'
+                ? 'border-foreground text-foreground font-medium'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            All leads
+          </button>
+          <button
+            type="button"
+            onClick={() => switchTab('unassigned')}
+            className={cn(
+              'px-4 py-2 text-sm border-b-2 transition-colors -mb-px inline-flex items-center gap-1.5',
+              activeTab === 'unassigned'
+                ? 'border-amber-400 text-amber-700 dark:text-amber-300 font-medium'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            Unassigned
+            {unassignedSummary.total > 0 && (
+              <span className="inline-flex items-center justify-center text-[9px] text-amber-700 dark:text-amber-300 border border-amber-500/40 bg-amber-500/10 h-4 px-1.5 rounded-full">
+                {unassignedSummary.total}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-3 justify-between">
         <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
           <span className="mono tabular-nums font-medium text-foreground">
@@ -624,6 +814,55 @@ export default function LeadsPage() {
       {err && (
         <div className="card border-amber-200 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 dark:text-amber-200 text-amber-800 text-sm py-3">
           {err} — table will populate when API responds.
+        </div>
+      )}
+
+      {/* Unassigned triage toolbar — surfaces the total, oldest waiter, and
+          bulk-RR actions. Only renders when the Unassigned tab is active and
+          there's something to triage. */}
+      {showUnassignedTab && activeTab === 'unassigned' && unassignedSummary.total > 0 && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
+              <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <span className="text-sm text-amber-800 dark:text-amber-200">
+                {unassignedSummary.total} {unassignedSummary.total === 1 ? 'lead needs' : 'leads need'} assignment
+              </span>
+              {unassignedSummary.oldest_lead?.age_hours !== null
+                && unassignedSummary.oldest_lead?.age_hours !== undefined && (
+                <span className="text-xs text-muted-foreground">
+                  · Oldest is {unassignedSummary.oldest_lead.age_hours}h old
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {selected.size > 0 ? (
+                <>
+                  <span className="text-xs text-muted-foreground">{selected.size} selected</span>
+                  <Button size="sm" variant="outline" onClick={handleBulkRoundRobin}>
+                    Run round robin
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                    Clear
+                  </Button>
+                </>
+              ) : (
+                <Button size="sm" onClick={handleAssignAllRoundRobin}>
+                  Run round robin on all
+                </Button>
+              )}
+            </div>
+          </div>
+          {Array.isArray(unassignedSummary.by_language) && unassignedSummary.by_language.length > 0 && (
+            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-amber-500/20 flex-wrap">
+              <span className="text-[10px] text-muted-foreground">By language:</span>
+              {unassignedSummary.by_language.map((row, i) => (
+                <span key={i} className="text-[10px] text-amber-700 dark:text-amber-300">
+                  <span className="capitalize">{row.language || '—'}</span> ({row.count})
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

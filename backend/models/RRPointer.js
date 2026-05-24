@@ -7,8 +7,9 @@ const { sequelize } = require('../config/database');
 //   rule:facebook_ads:hindi   — across routing rules for this tuple
 //   rule:facebook_ads:*       — across routing rules with language=null
 //   lang:hindi:groups         — across language-matched telesales groups
-//   lang:hindi:users          — across telesellers whose primary_language=hindi
-//   lang:hindi:users:overflow — across telesellers with hindi in additional_languages
+//   lang:hindi:users          — across telesellers whose languages array contains hindi
+//   lang_tele_sales_hindi     — simplified language-only RR used by utils/leadAssignment
+//   lang_senior_tamil         — same, scoped to seniors (direct ARK)
 //   any:users                 — final fallback across every active teleseller
 //
 // Separate from RoundRobinState so the group/campaign rotation stays

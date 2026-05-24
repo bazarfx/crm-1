@@ -16,7 +16,7 @@ async function list(req, res) {
   const leads = await Lead.findAll({
     where: { is_trial: true },
     include: [
-      { model: User, as: 'assignedTo', attributes: ['id', 'first_name', 'last_name', 'primary_language', 'additional_languages'] },
+      { model: User, as: 'assignedTo', attributes: ['id', 'first_name', 'last_name', 'languages'] },
       { model: Group, as: 'group', attributes: ['id', 'name', 'language'] },
       { model: Campaign, as: 'campaign', attributes: ['id', 'name'] },
     ],
@@ -146,7 +146,7 @@ async function createBatch(req, res) {
       assignmentLog.push({
         slot: i + 1,
         assigned_to: `${assignment.assignee.first_name} ${assignment.assignee.last_name}`,
-        language: assignment.assignee.primary_language,
+        language: (assignment.assignee.languages || [])[0] || null,
         group: assignment.group?.name,
         reason: assignment.reason,
       });

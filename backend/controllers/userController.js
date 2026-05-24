@@ -47,7 +47,7 @@ const VALID_LANGUAGES = [
 
 const UPDATABLE = [
   'first_name', 'last_name', 'email', 'role', 'department', 'is_active',
-  'avatar_url', 'primary_language', 'additional_languages',
+  'avatar_url', 'languages',
   'second_language', 'third_language',
   'gallabox_user_id', 'parent_node_id', 'alias',
 ];
@@ -55,24 +55,21 @@ const UPDATABLE = [
 function validateUserPayload(data, { isUpdate = false } = {}) {
   const errors = [];
   if (['tele_sales', 'senior'].includes(data.role)) {
-    if (!data.primary_language && !isUpdate) {
-      errors.push('primary_language is required for tele_sales and senior');
-    }
-    if (data.primary_language && !VALID_LANGUAGES.includes(data.primary_language)) {
-      errors.push(`Invalid primary_language: ${data.primary_language}`);
+    if (!isUpdate && (!Array.isArray(data.languages) || data.languages.length === 0)) {
+      errors.push('At least one language is required for tele_sales and senior roles');
     }
   }
-  if (data.additional_languages !== undefined && data.additional_languages !== null) {
-    if (!Array.isArray(data.additional_languages)) {
-      errors.push('additional_languages must be an array');
+  if (data.languages !== undefined && data.languages !== null) {
+    if (!Array.isArray(data.languages)) {
+      errors.push('languages must be an array');
     } else {
-      for (const lang of data.additional_languages) {
+      for (const lang of data.languages) {
         if (!VALID_LANGUAGES.includes(lang)) {
-          errors.push(`Invalid additional language: ${lang}`);
+          errors.push(`Invalid language: ${lang}`);
         }
       }
-      if (data.primary_language && data.additional_languages.includes(data.primary_language)) {
-        errors.push('primary_language cannot appear in additional_languages');
+      if (new Set(data.languages).size !== data.languages.length) {
+        errors.push('Duplicate languages not allowed');
       }
     }
   }
@@ -89,8 +86,8 @@ async function list(req, res) {
   const where = {};
   if (req.query.role) where.role = req.query.role;
   if (req.query.is_active) where.is_active = req.query.is_active === 'true';
-  if (req.query.primary_language) where.primary_language = req.query.primary_language;
-  else if (req.query.language) where.primary_language = req.query.language;
+  const langQ = req.query.language || req.query.primary_language;
+  if (langQ) where.languages = { [Op.contains]: [langQ] };
   if (req.query.search) {
     const q = `%${req.query.search}%`;
     where[Op.or] = [
@@ -162,8 +159,8 @@ async function create(req, res) {
   const exists = await User.findOne({ where: { email: body.email } });
   if (exists) return error(res, 'Email already in use', 409);
 
-  if (body.additional_languages === undefined || body.additional_languages === null) {
-    body.additional_languages = [];
+  if (body.languages === undefined || body.languages === null) {
+    body.languages = [];
   }
 
   // Strip `permissions` before passing to User.create — it isn't a User column.
@@ -334,55 +331,37 @@ async function changeLanguage(req, res) {
   if (!['super_admin', 'admin'].includes(req.user.role)) {
     return error(res, "Only admin / super admin can change a user's language", 403);
   }
-
   const target = await User.findByPk(req.params.id);
   if (!target) return error(res, 'User not found', 404);
 
-  const { primary_language, additional_languages } = req.body || {};
-  const updates = {};
-
-  if (primary_language !== undefined) {
-    if (!VALID_LANGUAGES.includes(primary_language)) {
-      return error(res, `Invalid primary_language: ${primary_language}`, 400);
-    }
-    updates.primary_language = primary_language;
+  const { languages, reason } = req.body || {};
+  if (!Array.isArray(languages) || languages.length === 0) {
+    return error(res, 'languages must be a non-empty array', 400);
   }
-  if (additional_languages !== undefined) {
-    if (!Array.isArray(additional_languages)) {
-      return error(res, 'additional_languages must be an array', 400);
-    }
-    for (const l of additional_languages) {
-      if (!VALID_LANGUAGES.includes(l)) {
-        return error(res, `Invalid additional language: ${l}`, 400);
-      }
-    }
-    const projectedPrimary = updates.primary_language || target.primary_language;
-    if (projectedPrimary && additional_languages.includes(projectedPrimary)) {
-      return error(res, 'primary_language cannot appear in additional_languages', 400);
-    }
-    updates.additional_languages = additional_languages;
+  for (const l of languages) {
+    if (!VALID_LANGUAGES.includes(l)) return error(res, `Invalid language: ${l}`, 400);
+  }
+  if (new Set(languages).size !== languages.length) {
+    return error(res, 'Duplicate languages not allowed', 400);
   }
 
-  const oldData = {
-    primary_language: target.primary_language,
-    additional_languages: target.additional_languages,
-  };
-  await target.update(updates);
+  const oldLanguages = target.languages;
+  await target.update({ languages });
 
   await AuditLog.create({
     user_id: req.user.id,
-    action: 'CHANGE_USER_LANGUAGE',
+    action: 'CHANGE_USER_LANGUAGES',
     resource: 'User',
     resource_id: target.id,
-    old_data: oldData,
-    new_data: updates,
+    old_data: { languages: oldLanguages },
+    new_data: { languages, reason },
     ip_address: req.ip,
   }).catch(() => {});
 
   return success(
     res,
     target.toSafeJSON(),
-    'Language updated. Future lead assignments will use the new language settings.',
+    'Languages updated. Existing assigned leads remain unchanged. Future round-robin will use the new languages.',
   );
 }
 
@@ -396,17 +375,19 @@ async function byLanguage(req, res) {
     where,
     attributes: [
       'id', 'first_name', 'last_name', 'email', 'role',
-      'primary_language', 'additional_languages',
+      'languages',
       'last_login_at', 'is_active', 'created_at',
     ],
-    order: [['primary_language', 'ASC'], ['first_name', 'ASC']],
+    order: [['first_name', 'ASC']],
   });
 
   const grouped = {};
   for (const u of users) {
-    const lang = u.primary_language || 'unassigned';
-    if (!grouped[lang]) grouped[lang] = [];
-    grouped[lang].push(u);
+    const langs = Array.isArray(u.languages) && u.languages.length ? u.languages : ['unassigned'];
+    for (const lang of langs) {
+      if (!grouped[lang]) grouped[lang] = [];
+      grouped[lang].push(u);
+    }
   }
 
   const result = Object.entries(grouped)
@@ -421,15 +402,11 @@ async function byLanguage(req, res) {
 }
 
 async function languageStats(req, res) {
-  const userCounts = await User.findAll({
+  // Pull the raw user rows and aggregate in JS — every language in the
+  // user's `languages` array counts toward that language's bucket.
+  const userRows = await User.findAll({
     where: { role: { [Op.in]: ['tele_sales', 'senior'] } },
-    attributes: [
-      'primary_language',
-      'role',
-      [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
-      [sequelize.fn('SUM', sequelize.literal('CASE WHEN is_active THEN 1 ELSE 0 END')), 'active_count'],
-    ],
-    group: ['primary_language', 'role'],
+    attributes: ['id', 'role', 'is_active', 'languages'],
     raw: true,
   });
 
@@ -444,44 +421,29 @@ async function languageStats(req, res) {
     raw: true,
   });
 
-  const overflowable = await User.findAll({
-    where: {
-      is_active: true,
-      role: { [Op.in]: ['tele_sales', 'senior'] },
-    },
-    attributes: ['additional_languages'],
-    raw: true,
-  });
-
-  const overflowCounts = {};
-  for (const u of overflowable) {
-    for (const lang of (u.additional_languages || [])) {
-      overflowCounts[lang] = (overflowCounts[lang] || 0) + 1;
-    }
-  }
-
   const emptyRow = (lang) => ({
     language: lang,
     telesellers: 0,
     seniors: 0,
     active_telesellers: 0,
     active_seniors: 0,
-    overflow_helpers: overflowCounts[lang] || 0,
     total_leads: 0,
     ftd_count: 0,
     total_deposits: 0,
   });
 
   const result = {};
-  for (const row of userCounts) {
-    const lang = row.primary_language || 'unassigned';
-    if (!result[lang]) result[lang] = emptyRow(lang);
-    if (row.role === 'tele_sales') {
-      result[lang].telesellers = parseInt(row.count, 10);
-      result[lang].active_telesellers = parseInt(row.active_count, 10);
-    } else if (row.role === 'senior') {
-      result[lang].seniors = parseInt(row.count, 10);
-      result[lang].active_seniors = parseInt(row.active_count, 10);
+  for (const u of userRows) {
+    const langs = Array.isArray(u.languages) && u.languages.length ? u.languages : ['unassigned'];
+    for (const lang of langs) {
+      if (!result[lang]) result[lang] = emptyRow(lang);
+      if (u.role === 'tele_sales') {
+        result[lang].telesellers += 1;
+        if (u.is_active) result[lang].active_telesellers += 1;
+      } else if (u.role === 'senior') {
+        result[lang].seniors += 1;
+        if (u.is_active) result[lang].active_seniors += 1;
+      }
     }
   }
   for (const row of leadStats) {
@@ -643,8 +605,7 @@ async function impersonate(req, res) {
         first_name: target.first_name,
         last_name: target.last_name,
         role: target.role,
-        primary_language: target.primary_language,
-        additional_languages: target.additional_languages,
+        languages: target.languages,
         impersonated: true,
         impersonated_by: {
           id: req.user.id,
@@ -663,7 +624,7 @@ async function listDeleted(req, res) {
     where: { deletedAt: { [Op.ne]: null } },
     attributes: [
       'id', 'first_name', 'last_name', 'email', 'role',
-      'primary_language', 'additional_languages', 'deletedAt', 'is_active',
+      'languages', 'deletedAt', 'is_active',
     ],
     order: [['deletedAt', 'DESC']],
   });

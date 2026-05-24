@@ -170,7 +170,7 @@ async function ingest(req, res) {
         country: data.country,
         language,
         lead_source: 'facebook_ads',
-        lead_status: 'new',
+        lead_status: ownerId ? 'new' : 'unassigned',
         campaign_name: data.campaign_name,
         ad_set_name: data.ad_set_name,
         ad_name: data.ad_name,
@@ -219,10 +219,24 @@ async function ingest(req, res) {
     );
 
     await tx.commit();
+    const assignee = routerResult?.assignee || null;
     return success(
       res,
-      { lead_id: lead.id, assigned_to_id: ownerId, group_id: groupId, campaign_id: campaign?.id || null },
-      'Lead ingested',
+      {
+        lead_id: lead.id,
+        assigned: !!ownerId,
+        assigned_to_id: ownerId,
+        assignee: assignee
+          ? { id: assignee.id, name: `${assignee.first_name || ''} ${assignee.last_name || ''}`.trim() }
+          : null,
+        language,
+        group_id: groupId,
+        campaign_id: campaign?.id || null,
+        reason: routerError?.message || routerResult?.reason || null,
+      },
+      ownerId
+        ? 'Lead ingested and assigned'
+        : 'Lead created but no matching teleseller — needs manual assignment',
       201,
     );
   } catch (e) {

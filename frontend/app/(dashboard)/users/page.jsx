@@ -574,7 +574,7 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
         <td className="p-3 capitalize">{user.role?.replace(/_/g, ' ')}</td>
       )}
       <td className="p-3">
-        <LanguageList primary={user.primary_language} additional={user.additional_languages} />
+        <LanguageList languages={user.languages} />
       </td>
 
       {/* Status quick-toggle */}

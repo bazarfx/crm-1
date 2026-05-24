@@ -55,22 +55,11 @@ User.init(
     },
     last_login_at: { type: DataTypes.DATE, allowNull: true },
     avatar_url: { type: DataTypes.STRING(512), allowNull: true },
-    primary_language: {
-      type: DataTypes.STRING(32),
-      allowNull: true,
-      comment: 'Required for tele_sales and senior. Determines lead routing.',
-      validate: {
-        isIn: {
-          args: [['english', 'tamil', 'telugu', 'hindi', 'marathi', 'gujarati', 'bengali', 'kannada', 'malayalam', 'punjabi']],
-          msg: 'Invalid language',
-        },
-      },
-    },
-    additional_languages: {
+    languages: {
       type: DataTypes.ARRAY(DataTypes.STRING),
       defaultValue: [],
       allowNull: false,
-      comment: 'Optional languages this user can occasionally help with. Used as overflow for round robin.',
+      comment: 'Languages this user speaks. Round robin assigns leads matching any of these.',
     },
     second_language: { type: DataTypes.STRING(32), allowNull: true },
     third_language: { type: DataTypes.STRING(32), allowNull: true },
@@ -109,18 +98,28 @@ User.init(
       { fields: ['role'] },
       { fields: ['is_active'] },
       { fields: ['parent_node_id'] },
-      { fields: ['primary_language'] },
-      { fields: ['additional_languages'], using: 'GIN' },
+      { fields: ['languages'], using: 'GIN' },
     ],
     validate: {
-      primaryLanguageRequired() {
-        if (['tele_sales', 'senior'].includes(this.role) && !this.primary_language) {
-          throw new Error('primary_language is required for tele_sales and senior roles');
+      languagesRequiredForOperators() {
+        if (['tele_sales', 'senior'].includes(this.role)) {
+          if (!Array.isArray(this.languages) || this.languages.length === 0) {
+            throw new Error('At least one language is required for tele_sales and senior roles');
+          }
         }
       },
-      noLanguageDuplicate() {
-        if (this.primary_language && Array.isArray(this.additional_languages) && this.additional_languages.includes(this.primary_language)) {
-          throw new Error('primary_language cannot also appear in additional_languages');
+      validLanguageValues() {
+        const VALID = ['english', 'tamil', 'telugu', 'hindi', 'marathi', 'gujarati', 'bengali', 'kannada', 'malayalam', 'punjabi'];
+        if (Array.isArray(this.languages)) {
+          for (const l of this.languages) {
+            if (!VALID.includes(l)) throw new Error(`Invalid language: ${l}`);
+          }
+        }
+      },
+      noDuplicateLanguages() {
+        if (Array.isArray(this.languages)) {
+          const set = new Set(this.languages);
+          if (set.size !== this.languages.length) throw new Error('Duplicate languages not allowed');
         }
       },
     },

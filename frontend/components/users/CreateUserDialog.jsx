@@ -88,8 +88,7 @@ const EMPTY = {
   last_name: '',
   email: '',
   password: 'Test@1234',
-  primary_language: '',
-  additional_languages: [],
+  languages: [],
   permissions: {}, // permission_key → level, only for custom
 };
 
@@ -131,8 +130,8 @@ export default function CreateUserDialog({ open, onOpenChange, onCreated }) {
       return;
     }
     if (profile.role === 'tele_sales' || profile.role === 'senior') {
-      if (!form.primary_language) {
-        toast.error('Primary language is required for tele_sales and senior');
+      if (!Array.isArray(form.languages) || form.languages.length === 0) {
+        toast.error('Select at least one language');
         return;
       }
     }
@@ -153,8 +152,7 @@ export default function CreateUserDialog({ open, onOpenChange, onCreated }) {
     };
 
     if (profile.role === 'tele_sales' || profile.role === 'senior') {
-      payload.primary_language = form.primary_language;
-      payload.additional_languages = form.additional_languages;
+      payload.languages = form.languages;
     }
     if (profile.role === 'custom') {
       payload.permissions = form.permissions;
@@ -332,94 +330,54 @@ function CredentialsBlock({ form, setForm, disabled }) {
 }
 
 function LanguageBlock({ form, setForm, role }) {
-  const setPrimary = (lang) => {
+  const toggle = (lang) => {
+    const has = (form.languages || []).includes(lang);
     setForm({
       ...form,
-      primary_language: lang,
-      additional_languages: (form.additional_languages || []).filter((l) => l !== lang),
-    });
-  };
-  const toggleAdditional = (lang) => {
-    if (lang === form.primary_language) {
-      toast.error('That language is already the primary');
-      return;
-    }
-    const has = (form.additional_languages || []).includes(lang);
-    setForm({
-      ...form,
-      additional_languages: has
-        ? form.additional_languages.filter((l) => l !== lang)
-        : [...(form.additional_languages || []), lang],
+      languages: has
+        ? form.languages.filter((l) => l !== lang)
+        : [...(form.languages || []), lang],
     });
   };
 
   return (
-    <>
-      <div className="space-y-1.5">
-        <Label className="text-xs flex items-center gap-1.5">
-          Primary language
-          <Badge variant="outline" className="text-[9px] text-red-600 dark:text-red-400 border-red-500/30 h-4 px-1 leading-none">
-            Required
-          </Badge>
-        </Label>
-        <div className="flex flex-wrap gap-1.5">
-          {LANGUAGES.map((l) => {
-            const active = form.primary_language === l.value;
-            return (
-              <button
-                key={l.value}
-                type="button"
-                onClick={() => setPrimary(l.value)}
-                className={cn(
-                  'inline-flex items-center gap-1 px-3 py-1 text-xs rounded-md border transition-colors',
-                  active
-                    ? 'bg-purple-500/15 border-purple-500/50 text-purple-700 dark:text-purple-300 font-medium'
-                    : 'bg-transparent border-border hover:bg-muted text-muted-foreground',
-                )}
-              >
-                {active && <Check className="h-3 w-3" />}
-                {l.label}
-              </button>
-            );
-          })}
-        </div>
-        <p className="text-[10px] text-muted-foreground">
-          {role === 'senior'
-            ? 'Determines which direct-ARK leads land on this senior (matched by customer language).'
-            : 'Determines which campaign leads round-robin to this teleseller.'}
-        </p>
+    <div className="space-y-1.5">
+      <Label className="text-xs flex items-center gap-1.5">
+        Languages spoken
+        <Badge variant="outline" className="text-[9px] text-red-600 dark:text-red-400 border-red-500/30 h-4 px-1 leading-none">
+          At least 1 required
+        </Badge>
+      </Label>
+      <div className="flex flex-wrap gap-1.5">
+        {LANGUAGES.map((l) => {
+          const selected = (form.languages || []).includes(l.value);
+          return (
+            <button
+              key={l.value}
+              type="button"
+              onClick={() => toggle(l.value)}
+              className={cn(
+                'inline-flex items-center gap-1 px-3 py-1 text-xs rounded-md border transition-colors',
+                selected
+                  ? 'bg-purple-500/15 border-purple-500/50 text-purple-700 dark:text-purple-300 font-medium'
+                  : 'bg-transparent border-border hover:bg-muted text-muted-foreground',
+              )}
+            >
+              {selected && <Check className="h-3 w-3" />}
+              {l.label}
+            </button>
+          );
+        })}
       </div>
-
-      <div className="space-y-1.5">
-        <Label className="text-xs">Also speaks (optional)</Label>
-        <div className="flex flex-wrap gap-1.5">
-          {LANGUAGES.filter((l) => l.value !== form.primary_language).map((l) => {
-            const selected = (form.additional_languages || []).includes(l.value);
-            return (
-              <button
-                key={l.value}
-                type="button"
-                onClick={() => toggleAdditional(l.value)}
-                className={cn(
-                  'inline-flex items-center gap-1 px-3 py-1 text-xs rounded-md border transition-colors',
-                  selected
-                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300'
-                    : 'bg-transparent border-border hover:bg-muted text-muted-foreground',
-                )}
-              >
-                {selected && <Check className="h-3 w-3" />}
-                {l.label}
-              </button>
-            );
-          })}
-        </div>
-        <p className="text-[10px] text-muted-foreground">
-          {role === 'senior'
-            ? 'Direct-ARK leads in these languages can also be assigned to this senior when the primary-language senior is unavailable.'
-            : 'Overflow languages — when the primary-language team is empty, leads in these languages can fall through to them.'}
-        </p>
-      </div>
-    </>
+      <p className="text-[10px] text-muted-foreground">
+        {role === 'senior'
+          ? 'Direct-ARK leads in any of these languages will round-robin to this senior.'
+          : 'Campaign leads in any of these languages will round-robin to this teleseller.'}
+        {(form.languages || []).length === 0 && (
+          <span className="text-red-500 dark:text-red-400"> Select at least one.</span>
+        )}
+      </p>
+    </div>
   );
 }
 

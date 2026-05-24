@@ -11,7 +11,7 @@ import {
 import {
   Users, PhoneCall, Wallet, UserCheck, Briefcase,
   Activity, Award, BarChart3, Calendar, Plus, Megaphone, UserCog, Webhook,
-  Languages,
+  Languages, AlertTriangle, ArrowRight,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { unwrap } from '@/lib/api';
@@ -79,6 +79,24 @@ export default function DashboardPage() {
     return () => { alive = false; };
   }, []);
 
+  // Unassigned-leads alert — only admin / super_admin / floor_manager care.
+  // Pulled separately so it appears even when the main dashboard summary is
+  // still loading.
+  const showUnassignedAlert = role === 'admin' || role === 'super_admin' || role === 'floor_manager';
+  const [unassignedCount, setUnassignedCount] = useState(0);
+  useEffect(() => {
+    if (!showUnassignedAlert) { setUnassignedCount(0); return; }
+    let alive = true;
+    api.get('/leads/unassigned/summary')
+      .then((res) => {
+        if (!alive) return;
+        const total = unwrap(res)?.total;
+        setUnassignedCount(typeof total === 'number' ? total : 0);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [showUnassignedAlert]);
+
   // Language teams stats — only admin / super_admin see the card, so only
   // fetch for those roles. Silently degrades if /users/language-stats isn't
   // available (e.g. backend still rolling out the endpoint).
@@ -130,6 +148,38 @@ export default function DashboardPage() {
       <motion.div variants={item}>
         <DashboardHeader greeting={greeting} roleLabel={roleLabel} role={role} err={err} />
       </motion.div>
+
+      {/* Unassigned-leads alert — surfaces leads that round-robin couldn't
+          route (no matching language speaker), so admins notice and dispatch
+          them rather than letting them rot in the queue. */}
+      {showUnassignedAlert && unassignedCount > 0 && (
+        <motion.div variants={item}>
+          <Card className="border-amber-500/30 bg-amber-500/5">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                      {unassignedCount} unassigned {unassignedCount === 1 ? 'lead needs' : 'leads need'} attention
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      No teleseller speaks the lead&apos;s language, or all matching telesellers are inactive.
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href="/leads?lead_status=unassigned"
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200 text-xs font-medium hover:bg-amber-500/20 transition-colors"
+                >
+                  Review
+                  <ArrowRight className="h-3 w-3" />
+                </Link>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
 
       {role === 'senior' && (
         <motion.div variants={item}>
