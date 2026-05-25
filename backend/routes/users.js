@@ -25,6 +25,7 @@ router.patch('/:id/activate', adminPlus, ctl.activate);
 router.patch('/:id/reset-password', adminPlus, ctl.resetPassword);
 router.patch('/:id/language', adminPlus, ctl.changeLanguage);
 router.get('/:id/with-fields', allowRoles(...STAFF_ADMIN, 'auditor', 'back_office'), ctl.getWithFieldDefs);
+router.get('/:id/stats', allowRoles(...STAFF_ADMIN, 'senior', 'auditor', 'back_office'), ctl.userStats);
 router.get('/:id/permissions', allowRoles(...STAFF_ADMIN), ctl.getPermissions);
 router.patch('/:id/permissions', adminPlus, ctl.setPermissions);
 router.post('/:id/restore', adminPlus, ctl.restoreUser);

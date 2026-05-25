@@ -766,6 +766,243 @@ async function restoreUser(req, res) {
   );
 }
 
+/* ============================================================
+ * GET /api/v1/users/:id/stats
+ *
+ * Aggregate performance metrics for a single user (teleseller/senior).
+ * Drives the per-user dashboard at /users/:id. All counts are scoped to
+ * leads where assigned_to_id = req.params.id; paranoid soft-delete is
+ * applied automatically by Sequelize.
+ *
+ * Returns:
+ *   totals: { leads, deals, deposits, conversion_rate }
+ *   by_language:  [{ language, leads, deals, deposits, conversion_rate }]
+ *   by_status:    [{ status, count }]
+ *   monthly_trend: [{ month: 'YYYY-MM', leads, deals }]
+ *   recent_leads:  [{ id, name, phone, status, created_at, ftd_at }]
+ * ============================================================ */
+async function userStats(req, res) {
+  try {
+    const target = await User.findByPk(req.params.id, {
+      attributes: ['id', 'first_name', 'last_name', 'email', 'role', 'languages', 'is_active', 'created_at'],
+    });
+    if (!target) return error(res, 'User not found', 404);
+
+    // ── Date-range parsing ───────────────────────────────────
+    // Accepts:
+    //   ?range=today|week|month|year         (computes from = period start, to = now)
+    //   ?range=custom&from=YYYY-MM-DD&to=YYYY-MM-DD
+    //   omitted / range=all                  (no range filter — all-time)
+    // Counts are scoped to lead.created_at within the range, except for
+    // deal counts (and deposits), which are scoped to ftd_at within the
+    // range. This matches the leaderboard convention: "deals closed in
+    // range" rather than "deals from leads created in range".
+    const { range, from: fromStr, to: toStr } = req.query;
+    let from = null;
+    let to = null;
+    if (range === 'today') {
+      from = new Date(); from.setHours(0, 0, 0, 0);
+      to = new Date();
+    } else if (range === 'week') {
+      const d = new Date();
+      const day = d.getDay();
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+      d.setDate(diff); d.setHours(0, 0, 0, 0);
+      from = d;
+      to = new Date();
+    } else if (range === 'month') {
+      from = new Date(); from.setDate(1); from.setHours(0, 0, 0, 0);
+      to = new Date();
+    } else if (range === 'year') {
+      from = new Date(); from.setMonth(0, 1); from.setHours(0, 0, 0, 0);
+      to = new Date();
+    } else if (range === 'custom' && fromStr && toStr) {
+      const f = new Date(fromStr);
+      const t = new Date(toStr);
+      if (!isNaN(f.getTime()) && !isNaN(t.getTime())) {
+        f.setHours(0, 0, 0, 0);
+        t.setHours(23, 59, 59, 999);
+        from = f;
+        to = t;
+      }
+    }
+
+    const inRange = (col) => (from && to) ? { [col]: { [Op.between]: [from, to] } } : {};
+    const ledgerWhere = { assigned_to_id: target.id, ...inRange('created_at') };
+    const dealWhere   = { assigned_to_id: target.id, ftd_at: { [Op.ne]: null }, ...inRange('ftd_at') };
+    const where = ledgerWhere; // legacy alias kept so the queries below read clean
+
+    const [
+      leadsTotal, dealsTotal, depositsTotal,
+      byLanguage, byStatus, monthlyTrend, recentLeads,
+    ] = await Promise.all([
+      // Leads in range — counted by created_at.
+      Lead.count({ where: ledgerWhere }),
+      // Deals in range — counted by ftd_at.
+      Lead.count({ where: dealWhere }),
+      // Deposits in range — sum where ftd_at is in range.
+      Lead.sum('deposited_amount', { where: dealWhere }),
+
+      // By-language breakdown. Leads counted by created_at; deals/deposits
+      // counted only when ftd_at also falls in the range. The literal below
+      // does the in-range FTD test inline so a single GROUP BY suffices.
+      Lead.findAll({
+        where: ledgerWhere,
+        attributes: [
+          'language',
+          [sequelize.fn('COUNT', sequelize.col('id')), 'leads'],
+          [
+            sequelize.fn(
+              'SUM',
+              from && to
+                ? sequelize.literal(
+                  `CASE WHEN ftd_at IS NOT NULL
+                          AND ftd_at BETWEEN '${from.toISOString()}' AND '${to.toISOString()}'
+                        THEN 1 ELSE 0 END`,
+                )
+                : sequelize.literal('CASE WHEN ftd_at IS NOT NULL THEN 1 ELSE 0 END'),
+            ),
+            'deals',
+          ],
+          [
+            sequelize.fn(
+              'SUM',
+              from && to
+                ? sequelize.literal(
+                  `CASE WHEN ftd_at IS NOT NULL
+                          AND ftd_at BETWEEN '${from.toISOString()}' AND '${to.toISOString()}'
+                        THEN COALESCE(deposited_amount, 0) ELSE 0 END`,
+                )
+                : sequelize.literal('COALESCE(deposited_amount, 0)'),
+            ),
+            'deposits',
+          ],
+        ],
+        group: ['language'],
+        raw: true,
+      }),
+
+      Lead.findAll({
+        where: ledgerWhere,
+        attributes: [
+          'lead_status',
+          [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+        ],
+        group: ['lead_status'],
+        raw: true,
+      }),
+
+      // Last 6 months — leads created + deals (ftd_at) in that month.
+      sequelize.query(
+        `WITH months AS (
+           SELECT generate_series(
+             date_trunc('month', NOW() - INTERVAL '5 months'),
+             date_trunc('month', NOW()),
+             '1 month'
+           )::date AS month
+         )
+         SELECT
+           to_char(months.month, 'YYYY-MM') AS month,
+           COALESCE(SUM(CASE WHEN l.created_at >= months.month
+                              AND l.created_at < months.month + INTERVAL '1 month'
+                             THEN 1 ELSE 0 END), 0) AS leads,
+           COALESCE(SUM(CASE WHEN l.ftd_at >= months.month
+                              AND l.ftd_at < months.month + INTERVAL '1 month'
+                             THEN 1 ELSE 0 END), 0) AS deals
+         FROM months
+         LEFT JOIN leads l
+           ON l.assigned_to_id = :uid
+          AND l.deleted_at IS NULL
+          AND (
+            (l.created_at >= months.month AND l.created_at < months.month + INTERVAL '1 month')
+            OR
+            (l.ftd_at  >= months.month AND l.ftd_at  < months.month + INTERVAL '1 month')
+          )
+         GROUP BY months.month
+         ORDER BY months.month ASC`,
+        { replacements: { uid: target.id }, type: sequelize.QueryTypes.SELECT }
+      ),
+
+      Lead.findAll({
+        where: ledgerWhere,
+        attributes: [
+          'id', 'first_name', 'last_name', 'phone', 'lead_status',
+          'language', 'created_at', 'ftd_at', 'deposited_amount',
+        ],
+        order: [['created_at', 'DESC']],
+        limit: 10,
+        raw: true,
+      }),
+    ]);
+
+    const conversionRate = leadsTotal > 0
+      ? Math.round((dealsTotal / leadsTotal) * 1000) / 10
+      : 0;
+
+    const byLangShaped = byLanguage
+      .filter((r) => r.language)
+      .map((r) => {
+        const leads = parseInt(r.leads, 10) || 0;
+        const deals = parseInt(r.deals, 10) || 0;
+        return {
+          language: r.language,
+          leads,
+          deals,
+          deposits: parseFloat(r.deposits || 0),
+          conversion_rate: leads > 0 ? Math.round((deals / leads) * 1000) / 10 : 0,
+        };
+      })
+      .sort((a, b) => b.leads - a.leads);
+
+    const byStatusShaped = byStatus.map((r) => ({
+      status: r.lead_status,
+      count: parseInt(r.count, 10) || 0,
+    }));
+
+    const monthlyShaped = (monthlyTrend || []).map((r) => ({
+      month: r.month,
+      leads: parseInt(r.leads, 10) || 0,
+      deals: parseInt(r.deals, 10) || 0,
+    }));
+
+    const recentShaped = (recentLeads || []).map((l) => ({
+      id: l.id,
+      name: `${l.first_name || ''} ${l.last_name || ''}`.trim() || '—',
+      phone: l.phone,
+      language: l.language,
+      status: l.lead_status,
+      created_at: l.created_at,
+      ftd_at: l.ftd_at,
+      deposited_amount: l.deposited_amount,
+    }));
+
+    return success(res, {
+      user: target,
+      // Echoes the resolved range so the frontend can display it ("Showing
+      // stats for: This week — 2026-05-19 → 2026-05-25"). When no range was
+      // applied, both `from` and `to` come back as null.
+      range: {
+        key: range || 'all',
+        from: from ? from.toISOString() : null,
+        to: to ? to.toISOString() : null,
+      },
+      totals: {
+        leads: leadsTotal,
+        deals: dealsTotal,
+        deposits: parseFloat(depositsTotal || 0),
+        conversion_rate: conversionRate,
+      },
+      by_language: byLangShaped,
+      by_status: byStatusShaped,
+      monthly_trend: monthlyShaped,
+      recent_leads: recentShaped,
+    });
+  } catch (e) {
+    console.error('userStats error:', e);
+    return error(res, e.message, 500);
+  }
+}
+
 module.exports = {
   list, getOne, create, update, remove, changePassword,
   changeLanguage, byLanguage, languageStats,
@@ -773,4 +1010,5 @@ module.exports = {
   deactivate, activate, resetPassword, impersonate, listDeleted, restoreUser,
   getWithFieldDefs,
   workload,
+  userStats,
 };

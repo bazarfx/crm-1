@@ -197,14 +197,28 @@ export default function LeadsPage() {
 
   useEffect(() => { refreshUnassignedSummary(); }, [refreshUnassignedSummary]);
 
-  // Deep-link entry from the dashboard banner: ?lead_status=unassigned should
-  // open the Unassigned tab pre-filtered. Only fires once on first render.
+  // Deep-link entry from anywhere in the app — runs once on first render and
+  // seeds the filter state from the URL query string. Supported params:
+  //   ?lead_status=unassigned        → opens the Unassigned tab (admin/fm only)
+  //   ?lead_status=new,contacted,…   → seeds filters.status with the list
+  //                                    (used by dashboard "Open leads" link)
+  //   ?assignee_id=<uuid>            → restricts to one teleseller's leads
+  //                                    (used by top-performers + leaderboard
+  //                                    rows linking back here)
   useEffect(() => {
-    if (!showUnassignedTab) return;
     const sp = searchParams?.get?.('lead_status');
-    if (sp === 'unassigned') {
+    const assignee = searchParams?.get?.('assignee_id');
+
+    if (sp === 'unassigned' && showUnassignedTab) {
       setActiveTab('unassigned');
       setFilters((f) => ({ ...f, status: ['unassigned'] }));
+    } else if (sp) {
+      const list = sp.split(',').map((s) => s.trim()).filter(Boolean);
+      if (list.length) setFilters((f) => ({ ...f, status: list }));
+    }
+
+    if (assignee) {
+      setFilters((f) => ({ ...f, assignee_id: assignee }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showUnassignedTab]);
@@ -239,6 +253,8 @@ export default function LeadsPage() {
         date_to: filters.date_to || undefined,
         has_ark: filters.has_ark || undefined,
         has_ftd: filters.has_ftd || undefined,
+        // Deep-link from top-performers / leaderboard: scope to one teleseller.
+        assigned_to_id: filters.assignee_id || undefined,
       };
       // Forward every cf_* filter key verbatim — the backend reads
       // `cf_<field_key>` query params and matches them against the JSONB

@@ -594,8 +594,16 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
 
   const initials = `${(user.first_name?.[0] || '').toUpperCase()}${(user.last_name?.[0] || '').toUpperCase()}` || '?';
 
+  // Clicking the row opens this user's dashboard view (stats, conversion,
+  // by-language perf, etc.). Buttons inside the action cells must stopPropagation
+  // so they don't also navigate.
+  const openDashboard = () => router.push(`/users/${user.id}/dashboard`);
+
   return (
-    <tr className="border-b last:border-0 hover:bg-muted/20 transition-colors">
+    <tr
+      className="border-b last:border-0 hover:bg-muted/20 transition-colors cursor-pointer"
+      onClick={openDashboard}
+    >
       {variant === 'grouped' && (
         <td className="p-3 w-10">
           <div className="w-7 h-7 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 flex items-center justify-center text-[10px] font-medium">
@@ -604,7 +612,7 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
         </td>
       )}
       <td className="p-3">
-        <p className="font-medium">{user.first_name} {user.last_name}</p>
+        <p className="font-medium hover:underline">{user.first_name} {user.last_name}</p>
         <p className="text-muted-foreground font-mono text-[10px]">{user.email}</p>
       </td>
       {variant !== 'grouped' && (
@@ -614,8 +622,9 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
         <LanguageList languages={user.languages} />
       </td>
 
-      {/* Status quick-toggle */}
-      <td className="p-3">
+      {/* Status quick-toggle — stopPropagation so toggling doesn't also
+          navigate to the user dashboard. */}
+      <td className="p-3" onClick={(e) => e.stopPropagation()}>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -658,8 +667,8 @@ function UserRow({ user, currentUser, isAdminOrAbove, onChange, onImpersonate, r
           </td>
         ))}
 
-      {/* 3-dot menu */}
-      <td className="p-3 text-right">
+      {/* 3-dot menu — stopPropagation so opening it doesn't also navigate. */}
+      <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="h-7 w-7">
