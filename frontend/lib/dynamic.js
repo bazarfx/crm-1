@@ -52,19 +52,6 @@ export function editableFields(definitions, userRole) {
   return visibleFields(definitions, userRole).filter(d => (d.editable_by_roles || []).includes(userRole));
 }
 
-export function groupBySection(definitions) {
-  const sections = {};
-  for (const d of definitions) {
-    const s = d.section || 'Custom';
-    if (!sections[s]) sections[s] = [];
-    sections[s].push(d);
-  }
-  return Object.entries(sections).map(([name, fields]) => ({
-    name,
-    fields: fields.sort((a, b) => (a.display_order || 100) - (b.display_order || 100))
-  }));
-}
-
 export function formatValue(def, value) {
   if (value === null || value === undefined || value === '') return '—';
   switch (def.field_type) {

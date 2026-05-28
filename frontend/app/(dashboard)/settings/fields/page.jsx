@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Plus, Edit, Archive, RotateCcw, ChevronDown, ChevronUp, Eye } from 'lucide-react';
+import { Plus, Edit, Archive, RotateCcw, ChevronDown, ChevronUp, Eye, Trash2 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -68,6 +68,36 @@ function FieldsContent() {
       load();
     } catch (e) {
       toast.error('Failed');
+    }
+  };
+
+  // Hard delete — only safe when no records hold a value for this field.
+  // Check usage first so the confirm prompt can be honest about whether
+  // the operation will actually go through; the backend rechecks anyway.
+  const hardDelete = async (d) => {
+    let count = 0;
+    try {
+      const { data } = await api.get(`/field-definitions/${d.id}/usage-count`);
+      count = data?.data?.count ?? 0;
+    } catch (_) { /* fall through — backend will refuse if needed */ }
+
+    if (count > 0) {
+      toast.error(
+        `${count} record${count === 1 ? '' : 's'} still hold a value for "${d.field_key}". Archive it instead, or migrate the data first.`,
+      );
+      return;
+    }
+    if (!confirm(
+      `Permanently delete "${d.label}"? This cannot be undone.\n\n` +
+      `The field has no data in any record. Archive is safer if you might want it back.`,
+    )) return;
+
+    try {
+      await api.delete(`/field-definitions/${d.id}`);
+      toast.success('Deleted permanently');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Delete failed');
     }
   };
 
@@ -254,6 +284,15 @@ function FieldsContent() {
                                   <Archive className="h-3 w-3 mr-1" />Archive
                                 </Button>
                               )}
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 text-xs text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                                onClick={() => hardDelete(d)}
+                                title="Permanently delete — only allowed when no records use this field"
+                              >
+                                <Trash2 className="h-3 w-3 mr-1" />Delete
+                              </Button>
                             </div>
                           </td>
                         </tr>

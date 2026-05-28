@@ -705,6 +705,66 @@ exports.testRender = async (req, res) => {
   }
 };
 
+// DELETE /field-definitions/:id
+// Permanently removes a field definition. Refuses if any existing record
+// of the entity stores a value under this field_key — the operator should
+// migrate / clear the data first (or just archive instead). Soft delete is
+// available via archive; this endpoint is for cleaning up never-used drafts.
+exports.hardDelete = async (req, res) => {
+  if (!requireSchemaRole(req, res)) return;
+  try {
+    const def = await FieldDefinition.findByPk(req.params.id);
+    if (!def) return error(res, 'Field not found', 404);
+
+    const modelName = ENTITY_MODEL_MAP[def.entity_type];
+    const Model = models[modelName];
+    if (Model) {
+      const tableName = Model.getTableName();
+      const [{ count }] = await sequelize.query(
+        `SELECT COUNT(*)::int AS count FROM "${tableName}"
+         WHERE custom_fields ? :key
+           AND custom_fields->>:key IS NOT NULL
+           AND custom_fields->>:key <> ''`,
+        {
+          replacements: { key: def.field_key },
+          type: sequelize.QueryTypes.SELECT,
+        },
+      );
+      if (count > 0) {
+        return error(
+          res,
+          `Cannot delete: ${count} record${count === 1 ? '' : 's'} still hold a value for "${def.field_key}". Archive it instead, or migrate the data first.`,
+          409,
+        );
+      }
+    }
+
+    const snapshot = {
+      field_key: def.field_key,
+      entity_type: def.entity_type,
+      label: def.label,
+      field_type: def.field_type,
+    };
+    await def.destroy();
+    invalidateCache();
+
+    const { AuditLog } = models;
+    if (AuditLog) {
+      await AuditLog.create({
+        user_id: req.user.id,
+        action: 'HARD_DELETE_FIELD_DEFINITION',
+        resource: 'FieldDefinition',
+        resource_id: req.params.id,
+        old_data: snapshot,
+        ip_address: req.ip,
+      }).catch(() => {});
+    }
+    return success(res, snapshot, 'Field permanently deleted');
+  } catch (e) {
+    return error(res, e.message, 500);
+  }
+};
+
 // How many rows of the target entity currently store a non-null value for
 // this field. Used by the UI to warn before archive ("this will hide a
 // field that 1,243 leads depend on").

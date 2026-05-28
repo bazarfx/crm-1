@@ -53,12 +53,16 @@ function DialogContent({ className, children, hideClose = false }) {
     <AnimatePresence>
       {ctx.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          {/* Overlay */}
+          {/* Overlay — plain darker fill instead of `backdrop-blur-sm`.
+              Chromium re-blurs the backdrop on every paint, which makes
+              scrolling inside a long dialog body visibly judder. A
+              slightly opaquer black gives the same "panel is on top of
+              dimmed page" read without the per-frame GPU cost. */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/70"
             onClick={() => ctx.onOpenChange?.(false)}
           />
           {/* Panel */}

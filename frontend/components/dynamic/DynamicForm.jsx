@@ -1,11 +1,19 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { DynamicField } from './DynamicField';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { fetchFieldDefinitions, editableFields, groupBySection, useFieldDefinitionsVersion } from '@/lib/dynamic';
+import { fetchFieldDefinitions, editableFields, useFieldDefinitionsVersion } from '@/lib/dynamic';
 import useStore from '@/store/useStore';
 
-export function DynamicForm({ entityType, values = {}, onChange, disabled, hideEmptySections, layout = 'card' }) {
+// Flat custom-field renderer. We dropped section grouping — fields just sit
+// in display_order in a single responsive grid. `hideEmptySections` is kept
+// for prop compatibility but now means "hide the whole form when read-only
+// and no values are filled in" (useful for sparse detail panels).
+// `layout` is accepted but ignored; every caller renders inline now.
+export function DynamicForm({
+  entityType, values = {}, onChange, disabled, hideEmptySections,
+  // eslint-disable-next-line no-unused-vars
+  layout,
+}) {
   const { user } = useStore();
   const [definitions, setDefinitions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -22,56 +30,38 @@ export function DynamicForm({ entityType, values = {}, onChange, disabled, hideE
       .finally(() => setLoading(false));
   }, [entityType, user?.role, defsVersion]);
 
-  const fields = editableFields(definitions, user?.role);
-  const sections = groupBySection(fields);
+  // editableFields already applies role-based visibility + edit filtering.
+  // Sort by display_order so the form mirrors what the schema editor sees
+  // in the reorder UI.
+  const fields = editableFields(definitions, user?.role)
+    .slice()
+    .sort((a, b) => (a.display_order || 100) - (b.display_order || 100));
 
   if (loading) return <div className="text-xs text-muted-foreground">Loading fields...</div>;
   if (!fields.length) return null;
 
-  const setField = (key, val) => onChange?.({ ...values, [key]: val });
-
-  if (layout === 'inline') {
-    return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {fields.map(d => (
-          <DynamicField
-            key={d.id}
-            definition={d}
-            value={values[d.field_key]}
-            onChange={v => setField(d.field_key, v)}
-            disabled={disabled}
-          />
-        ))}
-      </div>
+  // Read-only mode + no values to show → caller asked us to hide the whole
+  // form, so render nothing rather than an empty grid.
+  if (hideEmptySections && disabled) {
+    const hasAny = fields.some(
+      (f) => values[f.field_key] !== undefined && values[f.field_key] !== null && values[f.field_key] !== '',
     );
+    if (!hasAny) return null;
   }
 
+  const setField = (key, val) => onChange?.({ ...values, [key]: val });
+
   return (
-    <div className="space-y-3">
-      {sections.map(section => {
-        const hasValues = section.fields.some(
-          f => values[f.field_key] !== undefined && values[f.field_key] !== null
-        );
-        if (hideEmptySections && !hasValues && disabled) return null;
-        return (
-          <Card key={section.name}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">{section.name}</CardTitle>
-            </CardHeader>
-            <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {section.fields.map(d => (
-                <DynamicField
-                  key={d.id}
-                  definition={d}
-                  value={values[d.field_key]}
-                  onChange={v => setField(d.field_key, v)}
-                  disabled={disabled}
-                />
-              ))}
-            </CardContent>
-          </Card>
-        );
-      })}
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {fields.map((d) => (
+        <DynamicField
+          key={d.id}
+          definition={d}
+          value={values[d.field_key]}
+          onChange={(v) => setField(d.field_key, v)}
+          disabled={disabled}
+        />
+      ))}
     </div>
   );
 }

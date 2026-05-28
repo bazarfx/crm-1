@@ -101,17 +101,25 @@ function PopoverContent({ className, align = 'start', sideOffset = 6, children }
 
   React.useEffect(() => {
     if (!ctx.open) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') ctx.setOpen(false); };
+    // Capture phase + stopImmediatePropagation so Escape only dismisses the
+    // popover, not whatever parent (Dialog/Sheet/etc.) also listens for it.
+    // Without this, Escape inside a Popover-in-Dialog closes the Dialog too
+    // and loses the user's in-progress work.
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      ctx.setOpen(false);
+      e.stopImmediatePropagation();
+    };
     const onClick = (e) => {
       const t = e.target;
       if (panelRef.current?.contains(t)) return;
       if (ctx.triggerRef.current?.contains(t)) return;
       ctx.setOpen(false);
     };
-    document.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
     document.addEventListener('mousedown', onClick);
     return () => {
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey, true);
       document.removeEventListener('mousedown', onClick);
     };
   }, [ctx]);

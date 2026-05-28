@@ -5,5 +5,8 @@
       "PowerShell($loc = Get-Location; Write-Output \"Location: $loc\"; Get-ChildItem -Path \"D:\\\\CoreCoders\\\\Zoho\" -Force | ForEach-Object { Write-Output $_.Name })",
       "PowerShell(New-Item *)"
     ]
-  }
+  },
+  "disabledMcpjsonServers": [
+    "playwright"
+  ]
 }
