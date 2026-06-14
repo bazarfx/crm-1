@@ -19,6 +19,19 @@ async function setupAdminJS(app, models) {
     isVisible: { list: false, filter: false, show: false, edit: true, new: true },
   };
 
+  // Group resources into a handful of friendly sidebar buckets. Without
+  // explicit `navigation`, AdminJS lumps every model under a parent named
+  // after the database hostname (e.g. "Aws 1 Ap Northeast 1 Pooler Supabase
+  // Com") which is unreadable. Each group renders as a top-level collapsible
+  // section in the sidebar.
+  const NAV = {
+    People: { name: 'People', icon: 'User' },
+    Leads:  { name: 'Leads',  icon: 'Briefcase' },
+    Routing: { name: 'Routing', icon: 'GitBranch' },
+    Integrations: { name: 'Integrations', icon: 'Plug' },
+    System: { name: 'System', icon: 'Settings' },
+  };
+
   const adminJs = new AdminJS({
     rootPath: '/admin',
     branding: {
@@ -29,51 +42,63 @@ async function setupAdminJS(app, models) {
       {
         resource: models.User,
         options: {
+          navigation: NAV.People,
           properties: {
             password: passwordEdit,
             id: { isVisible: { list: false, filter: true, show: true, edit: false } },
           },
         },
       },
-      { resource: models.Config },
-      { resource: models.Group },
-      { resource: models.GroupMember },
-      { resource: models.Campaign },
-      { resource: models.CampaignGroupAssignment },
+      { resource: models.Group,        options: { navigation: NAV.People } },
+      { resource: models.GroupMember,  options: { navigation: NAV.People } },
+
       {
         resource: models.Lead,
         options: {
+          navigation: NAV.Leads,
           listProperties: [
             'id', 'first_name', 'last_name', 'phone', 'lead_status',
-            'language', 'assigned_to_id', 'created_at',
+            'language', 'assigned_to_id', 'createdAt',
           ],
         },
       },
-      { resource: models.LeadActivity },
-      { resource: models.ArkWebhookLog },
-      { resource: models.IngestLog },
-      { resource: models.RoundRobinState },
-      { resource: models.AuditLog },
-      { resource: models.RefreshToken },
+      { resource: models.LeadActivity, options: { navigation: NAV.Leads } },
       {
         resource: models.DealUndoRequest,
         options: {
+          navigation: NAV.Leads,
           listProperties: [
             'id', 'lead_id', 'requested_by_user_id', 'status',
-            'reviewed_by_user_id', 'reviewed_at', 'created_at',
+            'reviewed_by_user_id', 'reviewed_at', 'createdAt',
           ],
         },
       },
+
+      { resource: models.Campaign,                  options: { navigation: NAV.Routing } },
+      { resource: models.CampaignGroupAssignment,   options: { navigation: NAV.Routing } },
       {
         resource: models.RoutingRule,
         options: {
+          navigation: NAV.Routing,
           listProperties: [
             'id', 'lead_source', 'language', 'target_type', 'target_id',
-            'position', 'is_active', 'created_at',
+            'position', 'is_active', 'createdAt',
           ],
         },
       },
-      { resource: models.RRPointer },
+      { resource: models.RoundRobinState, options: { navigation: NAV.Routing } },
+      { resource: models.RRPointer,       options: { navigation: NAV.Routing } },
+
+      { resource: models.ArkWebhookLog, options: { navigation: NAV.Integrations } },
+      { resource: models.IngestLog,     options: { navigation: NAV.Integrations } },
+
+      { resource: models.Config,          options: { navigation: NAV.System } },
+      { resource: models.Setting,         options: { navigation: NAV.System } },
+      { resource: models.FieldDefinition, options: { navigation: NAV.System } },
+      { resource: models.RolePermission,  options: { navigation: NAV.System } },
+      { resource: models.UserPermission,  options: { navigation: NAV.System } },
+      { resource: models.AuditLog,        options: { navigation: NAV.System } },
+      { resource: models.RefreshToken,    options: { navigation: NAV.System } },
     ],
   });
 

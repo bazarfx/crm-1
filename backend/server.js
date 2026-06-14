@@ -31,8 +31,16 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true }));
+// AdminJS does its own form-encoded body parsing inside @adminjs/express.
+// If Express's body parsers run first, they drain the request stream and
+// AdminJS throws `WrongArgumentError: You probably used old body-parser`,
+// which kills /admin/login with a 500. Skipping body-parsers for /admin/*
+// keeps the rest of the API behavior unchanged.
+const skipAdmin = (mw) => (req, res, next) =>
+  req.path.startsWith('/admin') ? next() : mw(req, res, next);
+
+app.use(skipAdmin(express.json({ limit: '2mb' })));
+app.use(skipAdmin(express.urlencoded({ extended: true })));
 
 if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
 app.use(requestLogger);
