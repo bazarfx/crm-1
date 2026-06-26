@@ -12,7 +12,6 @@ import { useStore } from '@/store/useStore';
 import DataTable from '@/components/shared/DataTable';
 import StatusBadge from '@/components/shared/StatusBadge';
 import FilterDrawer from '@/components/leads/FilterDrawer';
-import LeadForm from '@/components/leads/LeadForm';
 import { Button } from '@/components/ui/button';
 import { inrFormat } from '@/lib/charts';
 import { cn } from '@/lib/utils';
@@ -24,6 +23,7 @@ import {
 } from '@/components/ui/select';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { DynamicFilterBar } from '@/components/dynamic/DynamicFilterBar';
+import { DynamicFilterChips } from '@/components/dynamic/DynamicFilterChips';
 import { DynamicCell } from '@/components/dynamic/DynamicCell';
 import { fetchFieldDefinitions, visibleFields } from '@/lib/dynamic';
 
@@ -158,7 +158,6 @@ export default function LeadsPage() {
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({});
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [formOpen, setFormOpen] = useState(false);
 
   // Custom field definitions for this entity, plus the per-user pick of which
   // ones should render as table columns. Defaults to the schema admin's
@@ -799,12 +798,20 @@ export default function LeadsPage() {
             <Download size={14} /> Export CSV
           </Button>
           {canCreate && !isReadOnly && (
-            <Button size="sm" onClick={() => setFormOpen(true)}>
+            <Button size="sm" onClick={() => router.push('/leads/new')}>
               <Plus size={14} /> Add Lead
             </Button>
           )}
         </div>
       </div>
+
+      {/* Active custom-field filter chips — visible + removable without
+          reopening the panel. */}
+      <DynamicFilterChips
+        entityType="lead"
+        filters={filters}
+        onChange={(next) => { setFilters(next); setPage(1); }}
+      />
 
       {/* Status quick-filter chip strip. Clicking a chip toggles that status
           on the current filter set without opening the drawer — the single
@@ -967,12 +974,6 @@ export default function LeadsPage() {
         value={filters}
         onApply={(f) => { setFilters(f); setPage(1); }}
         campaigns={campaigns}
-      />
-
-      <LeadForm
-        open={formOpen}
-        onClose={() => setFormOpen(false)}
-        onSaved={() => { setFormOpen(false); fetchData(); }}
       />
     </div>
   );

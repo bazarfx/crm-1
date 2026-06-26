@@ -7,9 +7,11 @@
  * model hooks).
  */
 
-const { RolePermission, AuditLog, sequelize } = require('../models');
+const models = require('../models');
+const { RolePermission, Role, AuditLog, sequelize } = models;
 const { success, error } = require('../utils/responseHelper');
 const { invalidateCache } = require('../utils/permissions');
+const { listRoleKeys } = require('../utils/roles');
 const {
   PERMISSION_CATEGORIES,
   PERMISSION_DEFINITIONS,
@@ -17,6 +19,16 @@ const {
   ALL_ROLES,
   VALID_LEVELS,
 } = require('../utils/permissionDefaults');
+
+// Live role-key list (built-ins + custom roles), used for the matrix columns
+// and to validate mutations. Falls back to the static ALL_ROLES.
+async function roleKeys() {
+  try {
+    return await listRoleKeys(models);
+  } catch {
+    return ALL_ROLES;
+  }
+}
 
 /* ──────────────────────────────────────────────────────────────────
  * GET /api/v1/role-permissions
@@ -58,10 +70,23 @@ exports.getMatrix = async (req, res) => {
     matrix[r.category].permissions[r.permission_key].roles[r.role] = r.level;
   }
 
+  const keys = await roleKeys();
+
+  // Per-role display metadata (name + colour) so the UI can render columns for
+  // custom roles it has never heard of.
+  let role_meta = {};
+  try {
+    const roles = await Role.findAll({ attributes: ['key', 'name', 'color', 'is_system'] });
+    role_meta = Object.fromEntries(
+      roles.map((r) => [r.key, { name: r.name, color: r.color, is_system: r.is_system }]),
+    );
+  } catch { /* roles table not ready — UI falls back to its static labels */ }
+
   return success(res, {
     matrix,
-    roles: ALL_ROLES,
-    editable_roles: ALL_ROLES.filter((r) => !NON_EDITABLE_ROLES.includes(r)),
+    roles: keys,
+    role_meta,
+    editable_roles: keys.filter((r) => !NON_EDITABLE_ROLES.includes(r)),
     non_editable_roles: NON_EDITABLE_ROLES,
     valid_levels: VALID_LEVELS,
   });
@@ -83,7 +108,7 @@ exports.updateOne = async (req, res) => {
       403
     );
   }
-  if (!ALL_ROLES.includes(role)) {
+  if (!(await roleKeys()).includes(role)) {
     return error(res, `Invalid role: ${role}`, 400);
   }
   if (!VALID_LEVELS.includes(level)) {
@@ -125,11 +150,12 @@ exports.bulkUpdate = async (req, res) => {
   }
 
   // Pre-flight: reject the whole batch if any row targets super_admin
+  const keys = await roleKeys();
   for (const c of changes) {
     if (NON_EDITABLE_ROLES.includes(c.role)) {
       return error(res, `Cannot modify ${c.role}`, 403);
     }
-    if (!ALL_ROLES.includes(c.role)) {
+    if (!keys.includes(c.role)) {
       return error(res, `Invalid role: ${c.role}`, 400);
     }
     if (!VALID_LEVELS.includes(c.level)) {
@@ -181,7 +207,8 @@ exports.copyRole = async (req, res) => {
   if (NON_EDITABLE_ROLES.includes(to_role)) {
     return error(res, `Cannot modify ${to_role}`, 403);
   }
-  if (!ALL_ROLES.includes(from_role) || !ALL_ROLES.includes(to_role)) {
+  const keys = await roleKeys();
+  if (!keys.includes(from_role) || !keys.includes(to_role)) {
     return error(res, 'Invalid role', 400);
   }
   if (from_role === to_role) {
@@ -239,7 +266,7 @@ exports.resetDefaults = async (req, res) => {
   if (role && NON_EDITABLE_ROLES.includes(role)) {
     return error(res, `Cannot reset ${role}`, 403);
   }
-  if (role && !ALL_ROLES.includes(role)) {
+  if (role && !(await roleKeys()).includes(role)) {
     return error(res, 'Invalid role', 400);
   }
 
@@ -297,7 +324,7 @@ exports.disableCategory = async (req, res) => {
   if (NON_EDITABLE_ROLES.includes(role)) {
     return error(res, `Cannot modify ${role}`, 403);
   }
-  if (!ALL_ROLES.includes(role)) {
+  if (!(await roleKeys()).includes(role)) {
     return error(res, 'Invalid role', 400);
   }
   if (!category || !PERMISSION_CATEGORIES[category]) {

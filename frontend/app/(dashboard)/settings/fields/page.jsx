@@ -1,6 +1,7 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { Plus, Edit, Archive, RotateCcw, ChevronDown, ChevronUp, Eye, Trash2 } from 'lucide-react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Plus, Edit, Archive, RotateCcw, ChevronDown, ChevronUp, Eye, Trash2, Loader2 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,32 +10,41 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import RoleGuard from '@/components/layout/RoleGuard';
 import api from '@/lib/api';
 import { invalidateFieldDefinitions } from '@/lib/dynamic';
-import { FieldEditorDialog } from './FieldEditorDialog';
+import { useModules } from '@/lib/modules';
+import { FieldTypePalette } from '@/components/dynamic/FieldTypePalette';
 import { cn } from '@/lib/utils';
-
-const ENTITIES = [
-  { key: 'lead', label: 'Leads' },
-  { key: 'user', label: 'Users' },
-  { key: 'deal', label: 'Deals' },
-  { key: 'campaign', label: 'Campaigns' },
-  { key: 'group', label: 'Groups' },
-  { key: 'lead_activity', label: 'Activities' },
-];
 
 export default function FieldsAdminPage() {
   return (
     <RoleGuard allowedRoles={['super_admin', 'schema_editor']}>
-      <FieldsContent />
+      <Suspense fallback={(
+        <div className="py-24 flex items-center justify-center text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </div>
+      )}>
+        <FieldsContent />
+      </Suspense>
     </RoleGuard>
   );
 }
 
 function FieldsContent() {
+  const router = useRouter();
+  const sp = useSearchParams();
+  const { modules } = useModules();
+  // Tabs come from the modules registry so custom modules get a fields tab.
+  // Every module gets a fields tab (incl. inactive ones — schema editing is
+  // legitimate on a deactivated module).
+  const ENTITIES = useMemo(
+    () => (modules || [])
+      .slice()
+      .sort((a, b) => (a.display_order || 0) - (b.display_order || 0))
+      .map((m) => ({ key: m.key, label: m.label_plural })),
+    [modules],
+  );
   const [defs, setDefs] = useState([]);
   const [showArchived, setShowArchived] = useState(false);
-  const [editingField, setEditingField] = useState(null);
-  const [createForEntity, setCreateForEntity] = useState(null);
-  const [activeTab, setActiveTab] = useState('lead');
+  const [activeTab, setActiveTab] = useState(() => sp.get('entity') || 'lead');
 
   const load = async () => {
     try {
@@ -49,6 +59,14 @@ function FieldsContent() {
   };
 
   useEffect(() => { load(); }, [showArchived]);
+
+  // Keep activeTab valid as the registry resolves — guards a stale/deleted
+  // ?entity key so the tab body never renders permanently blank.
+  useEffect(() => {
+    if (ENTITIES.length && !ENTITIES.some((e) => e.key === activeTab)) {
+      setActiveTab(ENTITIES[0].key);
+    }
+  }, [ENTITIES, activeTab]);
 
   const archive = async (id) => {
     if (!confirm('Archive this field? Existing data will be preserved but hidden from the UI.')) return;
@@ -164,10 +182,12 @@ function FieldsContent() {
                 <p className="text-xs text-muted-foreground">
                   Fields appear in this order on {entity.label.toLowerCase()} forms and detail pages.
                 </p>
-                <Button size="sm" onClick={() => setCreateForEntity(entity.key)}>
+                <Button size="sm" onClick={() => router.push(`/settings/fields/new?entity=${entity.key}`)}>
                   <Plus className="h-3.5 w-3.5 mr-1.5" />New field
                 </Button>
               </div>
+
+              <FieldTypePalette entityKey={entity.key} />
 
               <Card>
                 <CardContent className="p-0">
@@ -261,7 +281,7 @@ function FieldsContent() {
                                 size="sm"
                                 variant="ghost"
                                 className="h-7 text-xs"
-                                onClick={() => setEditingField(d)}
+                                onClick={() => router.push(`/settings/fields/${d.id}`)}
                               >
                                 <Edit className="h-3 w-3 mr-1" />Edit
                               </Button>
@@ -305,25 +325,6 @@ function FieldsContent() {
           );
         })}
       </Tabs>
-
-      {(editingField || createForEntity) && (
-        <FieldEditorDialog
-          field={editingField}
-          entityType={createForEntity || editingField?.entity_type}
-          open={!!(editingField || createForEntity)}
-          onOpenChange={(o) => {
-            if (!o) {
-              setEditingField(null);
-              setCreateForEntity(null);
-            }
-          }}
-          onSaved={() => {
-            setEditingField(null);
-            setCreateForEntity(null);
-            load();
-          }}
-        />
-      )}
     </div>
   );
 }

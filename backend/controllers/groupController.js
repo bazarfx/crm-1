@@ -24,19 +24,25 @@ async function list(req, res) {
     where.name = { [Op.iLike]: `%${req.query.search}%` };
   }
 
-  const finalWhere = applyCustomFieldFilters(where, req.query, 'Group');
+  const finalWhere = await applyCustomFieldFilters(where, req.query, 'Group', 'group');
 
   const { rows, count } = await Group.findAndCountAll({
     where: finalWhere,
     order: [['created_at', 'DESC']],
     limit,
     offset,
+    distinct: true,
     include: [
       {
         model: User,
         as: 'members',
         attributes: ['id', 'first_name', 'last_name', 'email', 'role'],
         through: { attributes: ['rr_index', 'is_active', 'joined_at'] },
+      },
+      {
+        model: User,
+        as: 'creator',
+        attributes: ['id', 'first_name', 'last_name'],
       },
     ],
   });

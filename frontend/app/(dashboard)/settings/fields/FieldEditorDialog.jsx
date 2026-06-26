@@ -42,7 +42,14 @@ const ROLES = [
   'senior', 'tele_sales', 'back_office', 'auditor',
 ];
 
-export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSaved }) {
+/**
+ * Page/dialog-agnostic editor body. Holds all the field-editor logic and
+ * renders the header + two-column body + footer + inline prompts as a bare
+ * fragment. The chrome (a Dialog overlay vs. a full-page bounded card) is
+ * supplied by the thin wrappers below, so the same battle-tested logic runs
+ * in both surfaces. `onCancel` replaces the old `onOpenChange(false)`.
+ */
+function FieldEditorCore({ field, entityType, initialType, layout = 'dialog', onCancel, onSaved }) {
   const isEdit = !!field?.id;
   const [form, setForm] = useState({});
   const [usage, setUsage] = useState(null);
@@ -74,9 +81,9 @@ export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSav
   const [previewValue, setPreviewValue] = useState(null);
 
   useEffect(() => {
-    if (!open) return;
-    // Re-seed the preview value to the current default whenever the dialog
-    // opens. After that, it floats independently.
+    // Re-seed the preview value to the current default whenever the editor
+    // mounts (Radix unmounts dialog content on close, and a page mounts fresh).
+    // After that, it floats independently.
     setPreviewValue(isEdit ? (field?.default_value ?? null) : null);
     // When editing, the key already exists — treat it as user-owned so we
     // never overwrite it. New fields start with the auto-track on.
@@ -99,8 +106,10 @@ export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSav
         entity_type: entityType,
         field_key: '',
         label: '',
-        field_type: 'text',
-        options: [],
+        field_type: (!isEdit && initialType && TYPES.includes(initialType)) ? initialType : 'text',
+        options: (!isEdit && ['dropdown', 'multiselect'].includes(initialType))
+          ? [{ value: '', label: '' }, { value: '', label: '' }]
+          : [],
         validation: {},
         default_value: null,
         helper_text: '',
@@ -118,7 +127,7 @@ export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSav
       });
       setUsage(null);
     }
-  }, [open, field, entityType, isEdit]);
+  }, [field, entityType, isEdit, initialType]);
 
   const setF = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -447,11 +456,7 @@ export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSav
   const entityLabel = (entityType || form.entity_type || 'record').replace(/_/g, ' ');
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-w-5xl w-[95vw] max-h-[90vh] overflow-hidden p-0 gap-0 border-border/60 flex flex-col"
-        hideClose
-      >
+    <>
         {/* Header — title + entity badge + tagline. Sits on a thin gradient
             tint so the dialog reads as "premium tool" rather than generic form.
             flex-shrink-0 keeps it pinned at the top of the flex column. */}
@@ -481,8 +486,8 @@ export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSav
           </DialogHeader>
           <button
             type="button"
-            onClick={() => onOpenChange(false)}
-            aria-label="Close dialog"
+            onClick={onCancel}
+            aria-label={layout === 'page' ? 'Back to fields' : 'Close dialog'}
             className="absolute right-3 top-3 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
           >
             <X className="h-4 w-4" />
@@ -720,7 +725,7 @@ export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSav
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button variant="outline" onClick={onCancel}>Cancel</Button>
             <Button
               onClick={save}
               disabled={saving || archiving || deleting}
@@ -763,8 +768,50 @@ export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSav
             onSkip={skipBackfill}
           />
         )}
+    </>
+  );
+}
+
+/**
+ * Dialog surface — kept for inline/embedded use. Wraps the core in a Radix
+ * Dialog with the original near-fullscreen sizing.
+ */
+export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSaved }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="max-w-5xl w-[95vw] max-h-[90vh] overflow-hidden p-0 gap-0 border-border/60 flex flex-col"
+        hideClose
+      >
+        <FieldEditorCore
+          field={field}
+          entityType={entityType}
+          layout="dialog"
+          onCancel={() => onOpenChange(false)}
+          onSaved={onSaved}
+        />
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Page surface — the full-page field editor used by /settings/fields/new and
+ * /settings/fields/[id]. A bounded flex card mirrors the DialogContent layout
+ * so the internal two-column scroll + sticky preview behave identically.
+ */
+export function FieldEditor({ field, entityType, initialType, onCancel, onSaved }) {
+  return (
+    <div className="flex flex-col h-[calc(100dvh-7rem)] rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+      <FieldEditorCore
+        field={field}
+        entityType={entityType}
+        initialType={initialType}
+        layout="page"
+        onCancel={onCancel}
+        onSaved={onSaved}
+      />
+    </div>
   );
 }
 

@@ -97,7 +97,7 @@ async function list(req, res) {
     // specific scope so they compose cleanly with assignee/source/etc.
     // Qualify with "Lead" because INCLUDE_DEAL joins users/groups/campaigns
     // (users now also has a custom_fields column).
-    const where = applyCustomFieldFilters(buildWhere(req), req.query, 'Lead');
+    const where = await applyCustomFieldFilters(buildWhere(req), req.query, 'Lead', 'lead');
 
     const result = await Lead.findAndCountAll({
       where,

@@ -14,12 +14,16 @@ import CommandPalette from '@/components/layout/CommandPalette';
 // matters — the longest-matching prefix wins so `/leads/[id]` is "Lead detail"
 // rather than the generic "Leads".
 const PAGE_TITLES = [
+  ['/m/',             'Records',           'Custom module records'],
+  ['/leads/new',      'Add lead',          'Create a new lead manually'],
   ['/leads/',         'Lead detail',       'Edit, log calls, and update status'],
   ['/leads',          'Leads',             'Manage your pipeline'],
   ['/dashboard',      'Dashboard',         null],
   ['/deals',          'Deals',             'FTD-closed leads'],
   ['/deal-requests',  'Undo requests',     'Review reversal requests'],
+  ['/users/new',      'New user',          'Pick a profile and set up access'],
   ['/users',          'Users',             'Staff and role management'],
+  ['/groups/new',     'New group',         'Create a round-robin team'],
   ['/groups',         'Groups',            'Round-robin assignment teams'],
   ['/campaigns',      'Campaigns',         null],
   ['/routing',        'Routing',           'Inbound lead distribution rules'],
@@ -29,6 +33,12 @@ const PAGE_TITLES = [
   ['/ark-logs',       'ARK webhook logs',  null],
   ['/trial-leads',    'Trial leads',       null],
   ['/permissions',    'Permissions',       'Role-based access matrix'],
+  ['/settings/fields/new', 'New field',    'Define a custom field'],
+  ['/settings/fields', 'Custom fields',    'Define fields across every entity'],
+  ['/settings/roles/new', 'New role',      'Create a role and place it in the hierarchy'],
+  ['/settings/roles', 'Roles & hierarchy', 'Dynamic roles and reporting tree'],
+  ['/settings/modules/new', 'New module',  'Create a custom module'],
+  ['/settings/modules', 'Modules',         'Built-in and custom modules'],
   ['/settings',       'Settings',          null],
 ];
 

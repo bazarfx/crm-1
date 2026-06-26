@@ -88,6 +88,25 @@ async function start() {
     console.log('✓ Models synced (alter:true)');
   }
 
+  // Seed/repair the built-in role hierarchy. Idempotent — only fills gaps, so
+  // admin re-parenting survives restarts. Guarded so a missing table (no sync)
+  // doesn't take down the server.
+  try {
+    const { ensureSystemRoles } = require('./utils/roles');
+    await ensureSystemRoles(models);
+    console.log('✓ System roles ensured');
+  } catch (e) {
+    console.warn('⚠ Role seeding skipped:', e.message);
+  }
+
+  try {
+    const { ensureSystemModules } = require('./utils/modules');
+    await ensureSystemModules(models);
+    console.log('✓ System modules ensured');
+  } catch (e) {
+    console.warn('⚠ Module seeding skipped:', e.message);
+  }
+
   try {
     await setupAdminJS(app, models);
     console.log('✓ AdminJS mounted at /admin');

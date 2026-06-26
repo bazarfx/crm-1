@@ -1,6 +1,9 @@
 const { sequelize, testConnection } = require('../config/database');
 
 const Config = require('./Config');
+const Role = require('./Role');
+const Module = require('./Module');
+const ModuleRecord = require('./ModuleRecord');
 const User = require('./User');
 const Group = require('./Group');
 const GroupMember = require('./GroupMember');
@@ -28,6 +31,17 @@ const FieldDefinition = require('./FieldDefinition');
 // User self-reference (org tree)
 User.belongsTo(User, { as: 'parent', foreignKey: 'parent_node_id' });
 User.hasMany(User, { as: 'reports', foreignKey: 'parent_node_id' });
+
+// Role hierarchy (self-referential tree). User.role holds Role.key as a string
+// — a deliberate loose coupling so custom roles need no FK migration.
+Role.belongsTo(Role, { as: 'parent', foreignKey: 'parent_role_id' });
+Role.hasMany(Role, { as: 'children', foreignKey: 'parent_role_id' });
+Role.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
+
+// Module registry + generic records. Loose-coupled by `key`/`module_key`
+// string (== FieldDefinition.entity_type) — no FK to Module, like Role.key.
+Module.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
+ModuleRecord.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
 
 // Group ↔ User (creator)
 Group.belongsTo(User, { as: 'creator', foreignKey: 'created_by' });
@@ -160,6 +174,9 @@ module.exports = {
   testConnection,
   syncDatabase,
   Config,
+  Role,
+  Module,
+  ModuleRecord,
   User,
   Group,
   GroupMember,

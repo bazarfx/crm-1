@@ -123,7 +123,7 @@ export default function StatCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
     >
-      <Card className={cn('overflow-hidden bg-gradient-to-br border-l-4', gradient)}>
+      <Card className={cn('overflow-hidden bg-gradient-to-br border-l-4 elevate', gradient)}>
         <CardContent className="p-5">
           <div className="flex items-start justify-between mb-3">
             <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">

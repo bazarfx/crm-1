@@ -5,11 +5,12 @@ import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Users, UserCog, Building2, Megaphone,
-  BarChart3, Webhook, Settings, Settings2, X, TrendingUp, LogOut, FlaskConical, Shield, Eye, Award, Undo2, Activity, Route,
+  BarChart3, Webhook, Settings, Settings2, X, TrendingUp, LogOut, FlaskConical, Shield, Eye, Award, Undo2, Activity, Route, Network, Boxes,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
+import { useModules, iconForModule } from '@/lib/modules';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -53,8 +54,10 @@ const NAV_GROUPS = [
   {
     label: 'System',
     items: [
+      { href: '/settings/roles',  label: 'Roles',         icon: Network,       roles: ADMIN },
       { href: '/permissions',     label: 'Permissions',   icon: Shield,        roles: ['super_admin'] },
       { href: '/trial-leads',      label: 'Trial Leads',   icon: FlaskConical,  roles: ['super_admin'] },
+      { href: '/settings/modules', label: 'Modules',       icon: Boxes,         roles: ['super_admin', 'admin', 'schema_editor'] },
       { href: '/settings/fields',  label: 'Custom fields', icon: Settings2,     roles: ['super_admin', 'schema_editor'] },
       { href: '/settings',         label: 'Settings',      icon: Settings,      roles: ADMIN },
     ],
@@ -82,6 +85,26 @@ export default function Sidebar({ open, onClose }) {
   const groups = NAV_GROUPS
     .map((g) => ({ ...g, items: g.items.filter((i) => !role || i.roles.includes(role)) }))
     .filter((g) => g.items.length > 0);
+
+  // Inject a dynamic "Modules" group of active custom modules (admin-ish roles
+  // only — record routes are gated server-side to the same set).
+  const { modules } = useModules();
+  const canSeeModules = ['super_admin', 'admin', 'floor_manager', 'schema_editor'].includes(role);
+  const customModules = canSeeModules
+    ? (modules || [])
+      .filter((m) => !m.is_system && m.is_active)
+      .sort((a, b) => (a.display_order || 0) - (b.display_order || 0))
+    : [];
+  const renderGroups = [];
+  for (const g of groups) {
+    renderGroups.push(g);
+    if (g.label === 'Workspace' && customModules.length) {
+      renderGroups.push({
+        label: 'Modules',
+        items: customModules.map((m) => ({ href: `/m/${m.key}`, label: m.label_plural, icon: iconForModule(m) })),
+      });
+    }
+  }
 
   const onLogout = async () => {
     await logout();
@@ -149,7 +172,7 @@ export default function Sidebar({ open, onClose }) {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto p-2 space-y-3">
-          {groups.map((group, gi) => (
+          {renderGroups.map((group, gi) => (
             <div key={group.label}>
               <p
                 className={cn(

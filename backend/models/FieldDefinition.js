@@ -15,9 +15,17 @@ FieldDefinition.init(
   {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
     entity_type: {
+      // Any registered module key (built-in OR custom). Membership in the
+      // module registry is enforced in the controller (cheap cached lookup);
+      // the model only enforces the snake_case shape.
       type: DataTypes.STRING,
       allowNull: false,
-      validate: { isIn: [VALID_ENTITIES] },
+      validate: {
+        is: {
+          args: /^[a-z][a-z0-9_]{1,49}$/,
+          msg: 'entity_type must be snake_case, start with a letter, 2-50 chars',
+        },
+      },
     },
     field_key: {
       type: DataTypes.STRING,

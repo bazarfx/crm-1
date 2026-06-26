@@ -172,7 +172,7 @@ function MultiSelect({ definition, value, onChange, disabled }) {
             className={cn(
               'px-3 py-1 text-xs rounded border transition-colors',
               isOn
-                ? 'bg-purple-500/15 border-purple-500/50 text-purple-300 font-medium'
+                ? 'bg-primary/10 border-primary/40 text-primary font-medium'
                 : 'bg-transparent border-border hover:bg-muted text-muted-foreground',
               disabled && 'opacity-50 cursor-not-allowed'
             )}

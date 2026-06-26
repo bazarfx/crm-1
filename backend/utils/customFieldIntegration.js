@@ -46,41 +46,128 @@ async function processIncomingCustomFields(entity_type, body, existingRecord = n
   return { custom_fields: value, errors };
 }
 
+// Field-type groupings that pick the right operator for a cf_ filter.
+const RANGE_TYPES = new Set(['number', 'currency', 'percent', 'date', 'datetime']);
+const NUMERIC_TYPES = new Set(['number', 'currency', 'percent']);
+const ARRAY_TYPES = new Set(['multiselect', 'tags']);
+const TEXT_TYPES = new Set(['text', 'long_text', 'email', 'phone', 'url', 'file_link']);
+
 /**
- * Build an array of Sequelize predicates from any `cf_<field_key>=value`
- * query params. Each predicate becomes one clause in an `Op.and` block on the
- * top-level WHERE — the caller does NOT need to know about the cf_ namespace.
+ * Build an array of Sequelize predicates from `cf_<field_key>` query params.
+ * Each predicate becomes one clause in an `Op.and` block on the top-level
+ * WHERE — the caller does NOT need to know about the cf_ namespace.
  *
- * Safety: field_key is whitelisted by KEY_RX before being interpolated; the
- * value is parameterised through sequelize.where (sequelize escapes the bind).
+ * The builder is TYPE-AWARE (it loads the field registry for `entityType`) so
+ * each filter uses the correct operator instead of blanket string equality:
+ *   - number/currency/percent  → `cf_<key>_min` / `cf_<key>_max` numeric range
+ *   - date/datetime            → `cf_<key>_min` / `cf_<key>_max` ISO-text range
+ *   - dropdown / boolean       → equality, or `IN (...)` for a comma list
+ *   - multiselect / tags       → JSON array membership (any of the values)
+ *   - text / email / phone / … → case-insensitive "contains"
+ * Unknown keys (no matching definition) fall back to legacy string equality,
+ * so nothing regresses if the registry can't be loaded.
  *
- * `tableAlias` qualifies the column reference so the literal works when the
- * query JOINs another table that also has a `custom_fields` column (e.g.
- * leads → users include). Defaults to the leads-style alias since the most
- * common caller is the lead/deal list with INCLUDE_ASSIGNEE on it.
+ * Safety: field_key is whitelisted by KEY_RX before interpolation; values are
+ * parameterised via sequelize.where / sequelize.escape. `tableAlias` qualifies
+ * the column so the literal works under a JOIN that also has custom_fields.
  */
-function buildCustomFieldClauses(queryParams = {}, tableAlias = null) {
+async function buildCustomFieldClauses(queryParams = {}, tableAlias = null, entityType = null) {
   const clauses = [];
   const prefix = tableAlias ? `"${tableAlias}".` : '';
+
+  // Load the field registry to pick operators by type. If unavailable, defMap
+  // stays null and every param falls back to legacy equality.
+  let defMap = null;
+  if (entityType) {
+    try {
+      const defs = await getDefinitionsFor(entityType);
+      defMap = new Map((defs || []).map((d) => [d.field_key, d]));
+    } catch { defMap = null; }
+  }
+
+  // Split params into range bounds vs. single-value filters. A `<base>_min` /
+  // `<base>_max` param is a range bound ONLY when <base> is a known range-type
+  // field; otherwise the whole key is treated as a literal field key.
+  const ranges = new Map(); // baseKey -> { type, min?, max? }
+  const values = [];        // { fieldKey, raw, def }
+
   for (const [key, value] of Object.entries(queryParams || {})) {
     if (!key.startsWith('cf_')) continue;
-    const fieldKey = key.slice(3);
-    if (!KEY_RX.test(fieldKey)) continue;
+    const field = key.slice(3);
+    const m = field.match(/^(.+)_(min|max)$/);
+    if (m && defMap) {
+      const base = m[1];
+      const def = defMap.get(base);
+      if (def && RANGE_TYPES.has(def.field_type) && KEY_RX.test(base)) {
+        if (!ranges.has(base)) ranges.set(base, { type: def.field_type });
+        ranges.get(base)[m[2]] = value;
+        continue;
+      }
+    }
+    if (!KEY_RX.test(field)) continue;
+    values.push({ fieldKey: field, raw: value, def: defMap ? defMap.get(field) : null });
+  }
 
-    // JSONB ->> always returns text, even for booleans/numbers. Compare as
-    // string; the validator stored everything as JSON, and the frontend
-    // sends the same shape, so equality works for all primitive types.
+  // ── Range clauses ──────────────────────────────────────────────────────
+  for (const [fieldKey, r] of ranges) {
+    const colExpr = `${prefix}custom_fields->>'${fieldKey}'`;
+    if (NUMERIC_TYPES.has(r.type)) {
+      // Guard the ::numeric cast so a stray non-numeric value can't error the
+      // whole query. ISO numbers only.
+      const guard = `${colExpr} ~ '^-?[0-9]+(\\.[0-9]+)?$'`;
+      if (r.min != null && r.min !== '' && Number.isFinite(Number(r.min))) {
+        clauses.push(sequelize.literal(`(${guard} AND (${colExpr})::numeric >= ${Number(r.min)})`));
+      }
+      if (r.max != null && r.max !== '' && Number.isFinite(Number(r.max))) {
+        clauses.push(sequelize.literal(`(${guard} AND (${colExpr})::numeric <= ${Number(r.max)})`));
+      }
+    } else {
+      // date/datetime — stored as full ISO-8601 UTC (…T…:…:….000Z). Text
+      // comparison is correct as long as both bounds share a sortable shape,
+      // so widen a date-only / minute-precision MAX bound to the end of that
+      // period (otherwise `<= '2024-01-15'` wrongly excludes that whole day).
+      // The MIN bound already sorts before any same-period timestamp.
+      const col = sequelize.literal(colExpr);
+      if (r.min != null && r.min !== '') clauses.push(sequelize.where(col, { [Op.gte]: String(r.min) }));
+      if (r.max != null && r.max !== '') {
+        let max = String(r.max);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(max)) max += 'T23:59:59.999Z';           // date-only
+        else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(max)) max += ':59.999Z'; // datetime-local
+        clauses.push(sequelize.where(col, { [Op.lte]: max }));
+      }
+    }
+  }
+
+  // ── Single-value clauses ───────────────────────────────────────────────
+  for (const { fieldKey, raw, def } of values) {
     const colExpr = `${prefix}custom_fields->>'${fieldKey}'`;
     const col = sequelize.literal(colExpr);
 
-    if (value === null || value === undefined || value === '' || value === 'null') {
+    if (raw === null || raw === undefined || raw === '' || raw === 'null') {
+      clauses.push(sequelize.literal(`(${colExpr} IS NULL OR ${colExpr} = '')`));
+      continue;
+    }
+
+    const type = def?.field_type;
+    const parts = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+
+    if (type && ARRAY_TYPES.has(type)) {
+      // Stored as a JSON array — match if it contains ANY requested value.
+      // jsonb_exists_any() is the function form of `?|` (avoids the `?`
+      // placeholder ambiguity in raw literals).
+      const arr = parts.map((v) => sequelize.escape(v)).join(', ');
       clauses.push(sequelize.literal(
-        `(${colExpr} IS NULL OR ${colExpr} = '')`,
+        `jsonb_exists_any(${prefix}custom_fields->'${fieldKey}', array[${arr}]::text[])`,
       ));
+    } else if (type && TEXT_TYPES.has(type)) {
+      clauses.push(sequelize.where(col, { [Op.iLike]: `%${raw}%` }));
+    } else if (parts.length > 1) {
+      clauses.push(sequelize.where(col, { [Op.in]: parts }));
     } else {
-      clauses.push(sequelize.where(col, String(value)));
+      clauses.push(sequelize.where(col, String(raw)));
     }
   }
+
   return clauses;
 }
 
@@ -88,10 +175,11 @@ function buildCustomFieldClauses(queryParams = {}, tableAlias = null) {
  * Convenience: caller already has a `where` object; this returns one wrapped
  * in `Op.and` with the cf_ predicates appended. If there are no cf_ params,
  * returns the where unchanged. Pass `tableAlias` when the query JOINs other
- * tables that may also expose a `custom_fields` column.
+ * tables that may also expose a `custom_fields` column, and `entityType` so the
+ * builder can resolve field types for the correct operators.
  */
-function applyCustomFieldFilters(where, queryParams, tableAlias = null) {
-  const clauses = buildCustomFieldClauses(queryParams, tableAlias);
+async function applyCustomFieldFilters(where, queryParams, tableAlias = null, entityType = null) {
+  const clauses = await buildCustomFieldClauses(queryParams, tableAlias, entityType);
   if (clauses.length === 0) return where;
   return { [Op.and]: [where, ...clauses] };
 }

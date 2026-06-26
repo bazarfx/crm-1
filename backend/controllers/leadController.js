@@ -144,7 +144,7 @@ async function list(req, res) {
   // values are passed through sequelize.where with bind parameters.
   // Qualify with "Lead" because INCLUDE_ASSIGNEE joins users (which also
   // has a custom_fields column post-AA migration).
-  const finalWhere = applyCustomFieldFilters(where, req.query, 'Lead');
+  const finalWhere = await applyCustomFieldFilters(where, req.query, 'Lead', 'lead');
 
   // `distinct: true` + `col: 'id'` makes Sequelize count distinct lead IDs
   // rather than the join-multiplied row count from INCLUDE_ASSIGNEE.

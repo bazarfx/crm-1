@@ -1,0 +1,13 @@
+# Local verification / scratch artifacts (screenshots, capture scripts, PDF dumps)
+.verify-tmp/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log
+
+# Safety nets (env + build output are also ignored per-folder)
+**/.env
+**/.env.local
+**/node_modules/
+**/.next/

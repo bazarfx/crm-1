@@ -17,9 +17,10 @@ const RolePermission = sequelize.define(
       primaryKey: true,
     },
     role: {
+      // Any role KEY from the dynamic roles registry (models/Role). Not
+      // constrained to ALL_ROLES so custom roles can have permission rows.
       type: DataTypes.STRING,
       allowNull: false,
-      validate: { isIn: [ALL_ROLES] },
     },
     permission_key: {
       type: DataTypes.STRING,

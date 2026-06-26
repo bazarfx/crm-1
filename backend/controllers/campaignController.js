@@ -20,7 +20,7 @@ async function list(req, res) {
   if (req.query.is_active !== undefined) where.is_active = req.query.is_active === 'true';
   if (req.query.search) where.name = { [Op.iLike]: `%${req.query.search}%` };
 
-  const finalWhere = applyCustomFieldFilters(where, req.query, 'Campaign');
+  const finalWhere = await applyCustomFieldFilters(where, req.query, 'Campaign', 'campaign');
 
   const { rows, count } = await Campaign.findAndCountAll({
     where: finalWhere,

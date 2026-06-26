@@ -1,6 +1,7 @@
 const { FieldDefinition, sequelize, ...models } = require('../models');
 const { success, error } = require('../utils/responseHelper');
 const { invalidateCache } = require('../utils/customFieldValidator');
+const { listModuleKeys } = require('../utils/modules');
 
 // Schema editing is a high-blast-radius capability — we gate it to a tiny
 // allowlist of roles regardless of the permission matrix. (super_admin always
@@ -33,6 +34,24 @@ const RESERVED_KEYS = new Set([
   'is_deleted', 'deleted_at', 'deleted_by', 'deletedAt',
   'custom_fields',
 ]);
+
+// Resolve the physical table + optional module scope for an entity_type's
+// JSONB maintenance SQL. Built-ins map to their own table (no scope). A custom
+// module maps to the shared module_records table, so every query MUST also
+// filter `module_key` (and skip soft-deleted rows) to stay within one module.
+function resolveEntityTable(entity_type) {
+  const mapped = ENTITY_MODEL_MAP[entity_type];
+  if (mapped && models[mapped]) {
+    return { tableName: models[mapped].getTableName(), scope: null };
+  }
+  if (models.ModuleRecord) {
+    return { tableName: models.ModuleRecord.getTableName(), scope: entity_type };
+  }
+  return { tableName: null, scope: null };
+}
+// SQL fragments for scoping module_records to one module.
+const andScope = (scope) => (scope ? ' AND module_key = :scope AND deleted_at IS NULL' : '');
+const whereScope = (scope) => (scope ? ' WHERE module_key = :scope AND deleted_at IS NULL' : '');
 
 exports.list = async (req, res) => {
   try {
@@ -78,12 +97,9 @@ exports.create = async (req, res) => {
   try {
     const payload = { ...req.body, created_by: req.user.id };
 
-    if (!FieldDefinition.VALID_ENTITIES.includes(payload.entity_type)) {
-      return error(
-        res,
-        `Invalid entity_type. Must be: ${FieldDefinition.VALID_ENTITIES.join(', ')}`,
-        400,
-      );
+    const validEntityKeys = await listModuleKeys(models);
+    if (!validEntityKeys.includes(payload.entity_type)) {
+      return error(res, 'Invalid entity_type — not a registered module', 400);
     }
     if (!FieldDefinition.VALID_TYPES.includes(payload.field_type)) {
       return error(
@@ -238,11 +254,9 @@ exports.backfillDefault = async (req, res) => {
       return error(res, 'Field has no default_value set — nothing to backfill', 400);
     }
 
-    const modelName = ENTITY_MODEL_MAP[def.entity_type];
-    const Model = models[modelName];
-    if (!Model) return error(res, `Entity ${def.entity_type} not available`, 400);
-
-    const tableName = Model.getTableName();
+    const { tableName, scope } = resolveEntityTable(def.entity_type);
+    if (!tableName) return error(res, `Entity ${def.entity_type} not available`, 400);
+    const scopeRepl = scope ? { scope } : {};
 
     // Only touch rows where the field is currently absent or null — never
     // overwrite a value an operator has already entered. The default_value
@@ -253,11 +267,11 @@ exports.backfillDefault = async (req, res) => {
     // even if the UPDATE returns 0 rowCount on some drivers.
     const [{ count: affected }] = await sequelize.query(
       `SELECT COUNT(*)::int AS count FROM "${tableName}"
-       WHERE NOT (custom_fields ? :key)
+       WHERE (NOT (custom_fields ? :key)
           OR custom_fields->>:key IS NULL
-          OR custom_fields->>:key = ''`,
+          OR custom_fields->>:key = '')${andScope(scope)}`,
       {
-        replacements: { key: def.field_key },
+        replacements: { key: def.field_key, ...scopeRepl },
         type: sequelize.QueryTypes.SELECT,
       },
     );
@@ -270,9 +284,9 @@ exports.backfillDefault = async (req, res) => {
          to_jsonb(:val::text)::jsonb,
          true
        )
-       WHERE NOT (custom_fields ? :key)
+       WHERE (NOT (custom_fields ? :key)
           OR custom_fields->>:key IS NULL
-          OR custom_fields->>:key = ''`,
+          OR custom_fields->>:key = '')${andScope(scope)}`,
       {
         replacements: {
           key: def.field_key,
@@ -280,6 +294,7 @@ exports.backfillDefault = async (req, res) => {
           // through the text bind parameter. to_jsonb(:val::text)::jsonb
           // re-parses it on the postgres side.
           val: JSON.stringify(def.default_value),
+          ...scopeRepl,
         },
       },
     );
@@ -326,25 +341,22 @@ exports.getOptionUsage = async (req, res) => {
     const value = req.query.value;
     if (value === undefined) return error(res, 'value query param is required', 400);
 
-    const modelName = ENTITY_MODEL_MAP[def.entity_type];
-    const Model = models[modelName];
-    if (!Model) return success(res, { count: 0 });
-
-    const tableName = Model.getTableName();
+    const { tableName, scope } = resolveEntityTable(def.entity_type);
+    if (!tableName) return success(res, { count: 0 });
 
     let countSql;
     if (def.field_type === 'dropdown') {
       countSql = `SELECT COUNT(*)::int AS count FROM "${tableName}"
-                  WHERE custom_fields->>:key = :val`;
+                  WHERE custom_fields->>:key = :val${andScope(scope)}`;
     } else {
       // multiselect: value lives inside a JSON array under custom_fields[key].
       // jsonb '?' tests array element membership.
       countSql = `SELECT COUNT(*)::int AS count FROM "${tableName}"
-                  WHERE (custom_fields->:key) ? :val`;
+                  WHERE (custom_fields->:key) ? :val${andScope(scope)}`;
     }
 
     const [{ count }] = await sequelize.query(countSql, {
-      replacements: { key: def.field_key, val: String(value) },
+      replacements: { key: def.field_key, val: String(value), ...(scope ? { scope } : {}) },
       type: sequelize.QueryTypes.SELECT,
     });
 
@@ -383,10 +395,9 @@ exports.migrateOptions = async (req, res) => {
       return error(res, 'migrations must be a non-empty array', 400);
     }
 
-    const modelName = ENTITY_MODEL_MAP[def.entity_type];
-    const Model = models[modelName];
-    if (!Model) return error(res, `Entity ${def.entity_type} not available`, 400);
-    const tableName = Model.getTableName();
+    const { tableName, scope } = resolveEntityTable(def.entity_type);
+    if (!tableName) return error(res, `Entity ${def.entity_type} not available`, 400);
+    const scopeRepl = scope ? { scope } : {};
 
     const results = [];
 
@@ -413,17 +424,17 @@ exports.migrateOptions = async (req, res) => {
         // SQL per strategy × field_type. The four combinations are spelled
         // out explicitly so the reader can match them against the docstring.
         let sql;
-        const repl = { key: def.field_key, old: String(removed_value) };
+        const repl = { key: def.field_key, old: String(removed_value), ...scopeRepl };
 
         if (def.field_type === 'dropdown' && strategy === 'empty') {
           // scalar match → null it
           sql = `UPDATE "${tableName}"
                  SET custom_fields = jsonb_set(custom_fields, ARRAY[:key]::text[], 'null'::jsonb, true)
-                 WHERE custom_fields->>:key = :old`;
+                 WHERE custom_fields->>:key = :old${andScope(scope)}`;
         } else if (def.field_type === 'dropdown' && strategy === 'replace') {
           sql = `UPDATE "${tableName}"
                  SET custom_fields = jsonb_set(custom_fields, ARRAY[:key]::text[], to_jsonb(:new::text)::jsonb, true)
-                 WHERE custom_fields->>:key = :old`;
+                 WHERE custom_fields->>:key = :old${andScope(scope)}`;
           repl.new = String(replacement_value);
         } else if (def.field_type === 'multiselect' && strategy === 'empty') {
           // array element removal: rebuild the array sans the removed value
@@ -437,7 +448,7 @@ exports.migrateOptions = async (req, res) => {
                    ),
                    true
                  )
-                 WHERE (custom_fields->:key) ? :old`;
+                 WHERE (custom_fields->:key) ? :old${andScope(scope)}`;
         } else if (def.field_type === 'multiselect' && strategy === 'replace') {
           // swap old → new inside the array, then dedupe so we don't end up
           // with the replacement appearing twice when the record already had it.
@@ -452,7 +463,7 @@ exports.migrateOptions = async (req, res) => {
                     ) sub),
                    true
                  )
-                 WHERE (custom_fields->:key) ? :old`;
+                 WHERE (custom_fields->:key) ? :old${andScope(scope)}`;
           repl.new = String(replacement_value);
         }
 
@@ -512,21 +523,20 @@ exports.backfillPreview = async (req, res) => {
     const def = await FieldDefinition.findByPk(req.params.id);
     if (!def) return error(res, 'Field not found', 404);
 
-    const modelName = ENTITY_MODEL_MAP[def.entity_type];
-    const Model = models[modelName];
-    if (!Model) return success(res, { affected_count: 0, total_count: 0 });
+    const { tableName, scope } = resolveEntityTable(def.entity_type);
+    if (!tableName) return success(res, { affected_count: 0, total_count: 0 });
+    const scopeRepl = scope ? { scope } : {};
 
-    const tableName = Model.getTableName();
     const [{ count: affected }] = await sequelize.query(
       `SELECT COUNT(*)::int AS count FROM "${tableName}"
-       WHERE NOT (custom_fields ? :key)
+       WHERE (NOT (custom_fields ? :key)
           OR custom_fields->>:key IS NULL
-          OR custom_fields->>:key = ''`,
-      { replacements: { key: def.field_key }, type: sequelize.QueryTypes.SELECT },
+          OR custom_fields->>:key = '')${andScope(scope)}`,
+      { replacements: { key: def.field_key, ...scopeRepl }, type: sequelize.QueryTypes.SELECT },
     );
     const [{ count: total }] = await sequelize.query(
-      `SELECT COUNT(*)::int AS count FROM "${tableName}"`,
-      { type: sequelize.QueryTypes.SELECT },
+      `SELECT COUNT(*)::int AS count FROM "${tableName}"${whereScope(scope)}`,
+      { replacements: scopeRepl, type: sequelize.QueryTypes.SELECT },
     );
 
     return success(res, {
@@ -716,17 +726,15 @@ exports.hardDelete = async (req, res) => {
     const def = await FieldDefinition.findByPk(req.params.id);
     if (!def) return error(res, 'Field not found', 404);
 
-    const modelName = ENTITY_MODEL_MAP[def.entity_type];
-    const Model = models[modelName];
-    if (Model) {
-      const tableName = Model.getTableName();
+    const { tableName, scope } = resolveEntityTable(def.entity_type);
+    if (tableName) {
       const [{ count }] = await sequelize.query(
         `SELECT COUNT(*)::int AS count FROM "${tableName}"
          WHERE custom_fields ? :key
            AND custom_fields->>:key IS NOT NULL
-           AND custom_fields->>:key <> ''`,
+           AND custom_fields->>:key <> ''${andScope(scope)}`,
         {
-          replacements: { key: def.field_key },
+          replacements: { key: def.field_key, ...(scope ? { scope } : {}) },
           type: sequelize.QueryTypes.SELECT,
         },
       );
@@ -773,20 +781,18 @@ exports.usageCount = async (req, res) => {
     const def = await FieldDefinition.findByPk(req.params.id);
     if (!def) return error(res, 'Field not found', 404);
 
-    const modelName = ENTITY_MODEL_MAP[def.entity_type];
-    const Model = models[modelName];
-    if (!Model) {
+    const { tableName, scope } = resolveEntityTable(def.entity_type);
+    if (!tableName) {
       return success(res, { count: 0, note: 'entity model not available' });
     }
 
-    const tableName = Model.getTableName();
     const result = await sequelize.query(
       `SELECT COUNT(*)::int AS count FROM "${tableName}"
        WHERE custom_fields ? :key
          AND custom_fields->>:key IS NOT NULL
-         AND custom_fields->>:key <> ''`,
+         AND custom_fields->>:key <> ''${andScope(scope)}`,
       {
-        replacements: { key: def.field_key },
+        replacements: { key: def.field_key, ...(scope ? { scope } : {}) },
         type: sequelize.QueryTypes.SELECT,
       },
     );

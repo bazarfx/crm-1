@@ -5,6 +5,7 @@ import {
   Plus, Edit, Archive, RotateCcw, ChevronUp, ChevronDown, ExternalLink,
 } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
@@ -12,7 +13,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { FieldEditorDialog } from '@/app/(dashboard)/settings/fields/FieldEditorDialog';
 import api, { unwrap } from '@/lib/api';
 import { invalidateFieldDefinitions } from '@/lib/dynamic';
 
@@ -34,11 +34,17 @@ const ENTITY_LABELS = {
  * display_order in stride-10 increments.
  */
 export function SchemaSidePanel({ entityType, open, onOpenChange }) {
+  const router = useRouter();
   const [fields, setFields] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [editingField, setEditingField] = useState(null);
-  const [creatingNew, setCreatingNew] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+
+  // Editing a field opens the full-page editor. Close the sheet first so the
+  // user lands on a clean page rather than the editor stacked over the panel.
+  const openEditor = (href) => {
+    onOpenChange?.(false);
+    router.push(href);
+  };
 
   const load = async () => {
     if (!entityType) return;
@@ -131,7 +137,7 @@ export function SchemaSidePanel({ entityType, open, onOpenChange }) {
         </SheetHeader>
 
         <div className="mt-2 space-y-3 overflow-y-auto">
-          <Button size="sm" className="w-full" onClick={() => setCreatingNew(true)}>
+          <Button size="sm" className="w-full" onClick={() => openEditor(`/settings/fields/new?entity=${entityType}`)}>
             <Plus className="h-3.5 w-3.5 mr-1.5" />Add new field
           </Button>
 
@@ -219,7 +225,7 @@ export function SchemaSidePanel({ entityType, open, onOpenChange }) {
                           size="icon"
                           variant="ghost"
                           className="h-6 w-6"
-                          onClick={() => setEditingField(f)}
+                          onClick={() => openEditor(`/settings/fields/${f.id}`)}
                           title="Edit"
                         >
                           <Edit className="h-3 w-3" />
@@ -282,23 +288,6 @@ export function SchemaSidePanel({ entityType, open, onOpenChange }) {
           )}
         </div>
 
-        <FieldEditorDialog
-          field={editingField}
-          entityType={entityType}
-          open={!!editingField || creatingNew}
-          onOpenChange={(o) => {
-            if (!o) {
-              setEditingField(null);
-              setCreatingNew(false);
-              load();
-            }
-          }}
-          onSaved={() => {
-            setEditingField(null);
-            setCreatingNew(false);
-            load();
-          }}
-        />
       </SheetContent>
     </Sheet>
   );

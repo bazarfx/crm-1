@@ -44,7 +44,10 @@ User.init(
     },
     password: { type: DataTypes.STRING(255), allowNull: false },
     role: {
-      type: DataTypes.ENUM(...ROLES),
+      // STRING, not ENUM, so custom roles created at runtime are valid values.
+      // `ROLES` lists the built-in system roles; the `roles` table is the live
+      // registry (see models/Role + utils/roles).
+      type: DataTypes.STRING(64),
       allowNull: false,
       defaultValue: 'tele_sales',
     },

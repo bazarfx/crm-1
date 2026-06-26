@@ -92,6 +92,12 @@ async function list(req, res) {
 
   const where = {};
   if (req.query.role) where.role = req.query.role;
+  // Multi-role filter (e.g. the "Others" pill on the users list) — one request,
+  // correct server-side pagination + totals instead of post-filtering a page.
+  else if (req.query.roles) {
+    const roles = String(req.query.roles).split(',').map((r) => r.trim()).filter(Boolean);
+    if (roles.length) where.role = { [Op.in]: roles };
+  }
   if (req.query.is_active) where.is_active = req.query.is_active === 'true';
   const langQ = req.query.language || req.query.primary_language;
   if (langQ) where.languages = { [Op.contains]: [langQ] };
@@ -107,7 +113,7 @@ async function list(req, res) {
 
   // Custom-field filters — any `cf_<field_key>=value` query param becomes
   // a JSONB ->> predicate on the user row's custom_fields blob.
-  const finalWhere = applyCustomFieldFilters(where, req.query);
+  const finalWhere = await applyCustomFieldFilters(where, req.query, null, 'user');
 
   const { rows, count } = await User.findAndCountAll({
     where: finalWhere,
