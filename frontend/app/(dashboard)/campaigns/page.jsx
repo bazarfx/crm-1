@@ -1,11 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   Plus, Megaphone, Search, Pencil, ChevronRight,
 } from 'lucide-react';
-import toast from 'react-hot-toast';
 import api, { unwrap } from '@/lib/api';
 import RoleGuard from '@/components/layout/RoleGuard';
 import EmptyState from '@/components/shared/EmptyState';
@@ -19,6 +18,7 @@ import { useDynamicColumns } from '@/components/dynamic/DynamicColumns';
 import { DynamicCell } from '@/components/dynamic/DynamicCell';
 import { ManageFieldsButton } from '@/components/dynamic/EditableForm';
 import CampaignDialog from '@/components/campaigns/CampaignDialog';
+import CampaignsFilterBar from './campaignsFilterBar';
 
 export default function CampaignsPage() {
   return (
@@ -33,7 +33,14 @@ function CampaignsContent() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [search, setSearch] = useState('');
-  const [customFilters, setCustomFilters] = useState({});
+  // Single consolidated filter object — holds native chips (language, is_active,
+  // platform) AND custom-field cf_* keys, mirroring leads/page.jsx. The shared
+  // FilterRail + DynamicFilterBar both read/write this same object.
+  const [filters, setFilters] = useState({});
+  // No pagination UI on this list (fetches limit:100), but keep a page cursor
+  // so the filter contract matches the other list pages: change → reset to 1.
+  const [page, setPage] = useState(1);
+  const applyFilters = useCallback((next) => { setFilters(next); setPage(1); }, []);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
 
@@ -43,9 +50,20 @@ function CampaignsContent() {
     setLoading(true);
     setErr(null);
     try {
-      const params = { limit: 100, search: search || undefined };
-      for (const k of Object.keys(customFilters)) {
-        if (customFilters[k] !== '' && customFilters[k] != null) params[k] = customFilters[k];
+      const params = {
+        limit: 100,
+        search: search || undefined,
+        // Native filter chips — preserve the exact backend query-param names.
+        language: filters.language || undefined,
+        is_active: filters.is_active || undefined,
+        platform: filters.platform || undefined,
+      };
+      // Forward every custom-field cf_* filter key verbatim — the backend reads
+      // cf_<field_key> params and matches them against the JSONB custom_fields.
+      for (const k of Object.keys(filters)) {
+        if (k.startsWith('cf_') && filters[k] !== '' && filters[k] != null) {
+          params[k] = filters[k];
+        }
       }
       const res = await api.get('/campaigns', { params });
       const payload = unwrap(res);
@@ -63,7 +81,7 @@ function CampaignsContent() {
     const t = setTimeout(() => load(), 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, customFilters]);
+  }, [search, filters, page]);
 
   return (
     <div className="space-y-4">
@@ -75,11 +93,6 @@ function CampaignsContent() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <DynamicFilterBar
-            entityType="campaign"
-            filters={customFilters}
-            onChange={setCustomFilters}
-          />
           <dyn.PickerButton />
           <ManageFieldsButton entityType="campaign" size="sm" />
           <Button size="sm" onClick={() => setCreating(true)}>
@@ -96,6 +109,14 @@ function CampaignsContent() {
           placeholder="Search campaigns by name…"
           className="pl-9 h-9 text-sm"
         />
+      </div>
+
+      {/* Horizontal filter rail — native campaign chips (Language, Status,
+          Platform) followed by the custom-field "+ Filter" chips. Everything
+          live-applies and resets to page 1. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <CampaignsFilterBar filters={filters} onChange={applyFilters} />
+        <DynamicFilterBar entityType="campaign" filters={filters} onChange={applyFilters} />
       </div>
 
       {err && (

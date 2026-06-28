@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, Download, Filter, Phone, Mail, Copy, CheckCircle2, X, AlertTriangle, Columns3 } from 'lucide-react';
+import { Plus, Download, Phone, Mail, Copy, CheckCircle2, X, AlertTriangle, Columns3 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -11,7 +11,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useStore } from '@/store/useStore';
 import DataTable from '@/components/shared/DataTable';
 import StatusBadge from '@/components/shared/StatusBadge';
-import FilterDrawer from '@/components/leads/FilterDrawer';
+import LeadFilterBar from '@/components/leads/LeadFilterBar';
 import { Button } from '@/components/ui/button';
 import { inrFormat } from '@/lib/charts';
 import { cn } from '@/lib/utils';
@@ -23,7 +23,6 @@ import {
 } from '@/components/ui/select';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { DynamicFilterBar } from '@/components/dynamic/DynamicFilterBar';
-import { DynamicFilterChips } from '@/components/dynamic/DynamicFilterChips';
 import { DynamicCell } from '@/components/dynamic/DynamicCell';
 import { fetchFieldDefinitions, visibleFields } from '@/lib/dynamic';
 
@@ -157,7 +156,7 @@ export default function LeadsPage() {
   const [limit] = useState(25);
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({});
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const applyFilters = useCallback((next) => { setFilters(next); setPage(1); }, []);
 
   // Custom field definitions for this entity, plus the per-user pick of which
   // ones should render as table columns. Defaults to the schema admin's
@@ -681,10 +680,10 @@ export default function LeadsPage() {
   // status filter only, leaving other filters intact (language, campaign…).
   const activeStatuses = filters.status || [];
   const QUICK_STATUSES = useMemo(() => {
-    // Pull the canonical ordering from config if available, otherwise fall
-    // back to the FALLBACK_STATUSES we already keep at the top of the file.
-    const base = statuses.slice(0, 8); // first 8 are the high-traffic ones
-    return base;
+    // Show the full status set — the strip is the single source of status
+    // filtering now that the vertical drawer is gone. It scrolls horizontally
+    // on narrow viewports rather than truncating the list.
+    return statuses;
   }, [statuses]);
 
   const toggleStatusChip = (slug) => {
@@ -758,13 +757,6 @@ export default function LeadsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setDrawerOpen(true)}>
-            <Filter size={14} /> Filters
-            {hasActiveFilters && (
-              <span className="ml-1 w-1.5 h-1.5 rounded-full bg-primary" />
-            )}
-          </Button>
-          <DynamicFilterBar entityType="lead" filters={filters} onChange={(next) => { setFilters(next); setPage(1); }} />
           {customDefs.length > 0 && (
             <Popover>
               <PopoverTrigger asChild>
@@ -805,13 +797,14 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* Active custom-field filter chips — visible + removable without
-          reopening the panel. */}
-      <DynamicFilterChips
-        entityType="lead"
-        filters={filters}
-        onChange={(next) => { setFilters(next); setPage(1); }}
-      />
+      {/* Horizontal filter rail — native lead filters (Language, Source,
+          Campaign, Date, ARK/FTD) as inline popover-chips, followed by the
+          custom-field "+ Filter" chips. Replaces the old vertical drawer;
+          everything live-applies. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <LeadFilterBar filters={filters} onChange={applyFilters} campaigns={campaigns} />
+        <DynamicFilterBar entityType="lead" filters={filters} onChange={applyFilters} />
+      </div>
 
       {/* Status quick-filter chip strip. Clicking a chip toggles that status
           on the current filter set without opening the drawer — the single
@@ -966,14 +959,6 @@ export default function LeadsPage() {
         onSearch={(q) => { setSearch(q); setPage(1); }}
         searchPlaceholder="Search by name, phone, campaign…"
         onRowClick={(r) => router.push(`/leads/${r.id}`)}
-      />
-
-      <FilterDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        value={filters}
-        onApply={(f) => { setFilters(f); setPage(1); }}
-        campaigns={campaigns}
       />
     </div>
   );

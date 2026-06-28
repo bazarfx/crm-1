@@ -1,18 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Activity, RefreshCw, ExternalLink, Phone, CalendarDays, X } from 'lucide-react';
+import { Activity, RefreshCw, ExternalLink, Phone, Users, UserRound, Zap, Calendar } from 'lucide-react';
 import api, { unwrap } from '@/lib/api';
 import RoleGuard from '@/components/layout/RoleGuard';
 import { cn } from '@/lib/utils';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
+import FilterRail from '@/components/shared/FilterRail';
 
 // Action metadata — label + accent color used to render the action badge.
 // Anything not in this map renders as the raw action key in the default
@@ -52,13 +50,30 @@ function SalesActivityContent() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState([]);
-  const [filter, setFilter] = useState({
+  const [filters, setFilters] = useState({
     role: initialRole,
     user_id: initialUserId,
     action: '',
     date_from: '',
     date_to: '',
   });
+
+  // Live-apply callback for the filter rail. Mirrors leads/page.jsx, with the
+  // one page-specific rule: changing role invalidates the user picker (a
+  // teleseller id is meaningless once the role flips to seniors), so we clear
+  // user_id whenever role changes.
+  const applyFilters = useCallback((next) => {
+    setFilters((prev) => {
+      // Role is always one of the three options — clearing the Role chip falls
+      // back to telesellers rather than sending no role (matches old Select,
+      // which had no "all roles" state).
+      const role = next.role || 'tele_sales';
+      // A teleseller id is meaningless once the effective role flips, so drop
+      // user_id whenever the role actually changes.
+      const user_id = role !== (prev.role || 'tele_sales') ? '' : next.user_id;
+      return { ...next, role, user_id };
+    });
+  }, []);
 
   // Pull a roster of telesellers / seniors for the user-picker. Done once on
   // mount — the list rarely changes mid-session and refetching on every
@@ -88,11 +103,11 @@ function SalesActivityContent() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (filter.role) params.append('role', filter.role);
-      if (filter.user_id) params.append('user_id', filter.user_id);
-      if (filter.action) params.append('action', filter.action);
-      if (filter.date_from) params.append('date_from', filter.date_from);
-      if (filter.date_to) params.append('date_to', filter.date_to);
+      if (filters.role) params.append('role', filters.role);
+      if (filters.user_id) params.append('user_id', filters.user_id);
+      if (filters.action) params.append('action', filters.action);
+      if (filters.date_from) params.append('date_from', filters.date_from);
+      if (filters.date_to) params.append('date_to', filters.date_to);
       params.append('limit', '100');
       const res = await api.get(`/audit-logs/sales-activity?${params}`);
       const data = unwrap(res) || {};
@@ -107,17 +122,53 @@ function SalesActivityContent() {
   useEffect(() => {
     loadLogs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter.role, filter.user_id, filter.action, filter.date_from, filter.date_to]);
+  }, [filters.role, filters.user_id, filters.action, filters.date_from, filters.date_to]);
 
-  // Group the picker list by role so the dropdown reads as
-  // "Seniors / John / Jane … / Telesellers / Alice / Bob".
-  const usersByRole = useMemo(() => {
-    const seniors = users.filter((u) => u.role === 'senior')
-      .sort((a, b) => (a.first_name || '').localeCompare(b.first_name || ''));
-    const telesellers = users.filter((u) => u.role === 'tele_sales')
-      .sort((a, b) => (a.first_name || '').localeCompare(b.first_name || ''));
-    return { seniors, telesellers };
+  // Build the user-picker options, ordered Seniors-first then Telesellers and
+  // each group alphabetical. The SingleSelect chip is flat, so we carry the
+  // role grouping into the label ("Senior · John") to preserve the same
+  // read order the old grouped dropdown had.
+  const userOptions = useMemo(() => {
+    const byRole = (role) => users
+      .filter((u) => u.role === role)
+      .sort((a, b) => (a.first_name || '').localeCompare(b.first_name || ''))
+      .map((u) => ({
+        value: u.id,
+        label: `${role === 'senior' ? 'Senior' : 'Teleseller'} · ${u.first_name || ''} ${u.last_name || ''}`.trim(),
+      }));
+    return [...byRole('senior'), ...byRole('tele_sales')];
   }, [users]);
+
+  // Spec for the shared horizontal filter rail. Param names (role, user_id,
+  // action, date_from, date_to) are unchanged — they map straight to what
+  // loadLogs sends. No DynamicFilterBar: audit logs have no custom fields.
+  const filterSpec = useMemo(() => [
+    {
+      // A required mode selector — there is no "all roles" backend state, so it
+      // always carries one of the three values (no clear / no "All" row).
+      key: 'role', label: 'Role', kind: 'single', required: true, glyph: Users, tint: 'bg-violet-500/40',
+      width: 'w-[220px]', capitalize: false,
+      options: [
+        { value: 'tele_sales', label: 'Telesellers' },
+        { value: 'senior', label: 'Seniors' },
+        { value: 'tele_sales,senior', label: 'Both' },
+      ],
+    },
+    {
+      key: 'user_id', label: 'User', kind: 'single', glyph: UserRound, tint: 'bg-indigo-500/40',
+      width: 'w-[280px]', allLabel: 'All users', capitalize: false,
+      options: userOptions,
+    },
+    {
+      key: 'action', label: 'Action', kind: 'single', glyph: Zap, tint: 'bg-blue-500/40',
+      width: 'w-[240px]', allLabel: 'All actions', capitalize: false,
+      options: Object.entries(ACTION_META).map(([k, v]) => ({ value: k, label: v.label })),
+    },
+    {
+      key: 'created', fromKey: 'date_from', toKey: 'date_to', label: 'Created',
+      kind: 'daterange', glyph: Calendar, tint: 'bg-amber-500/40',
+    },
+  ], [userOptions]);
 
   return (
     <div className="space-y-5">
@@ -137,96 +188,20 @@ function SalesActivityContent() {
         </Button>
       </div>
 
-      {/* Filters — single grouped bar, no per-control labels. Placeholders carry
-          the meaning; the eye skims left-to-right and groups them as one block. */}
-      <div className="rounded-xl border bg-card p-2.5 flex flex-wrap items-center gap-2">
-        <Select
-          value={filter.role}
-          onValueChange={(v) => setFilter((f) => ({ ...f, role: v, user_id: '' }))}
-        >
-          <SelectTrigger className="w-36 h-9 text-sm"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="tele_sales">Telesellers</SelectItem>
-            <SelectItem value="senior">Seniors</SelectItem>
-            <SelectItem value="tele_sales,senior">Both</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Select
-          value={filter.user_id || 'all'}
-          onValueChange={(v) => setFilter((f) => ({ ...f, user_id: v === 'all' ? '' : v }))}
-        >
-          <SelectTrigger className="w-52 h-9 text-sm"><SelectValue placeholder="All users" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All users</SelectItem>
-            {usersByRole.seniors.length > 0 && (
-              <div className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                Seniors
-              </div>
-            )}
-            {usersByRole.seniors.map((u) => (
-              <SelectItem key={u.id} value={u.id}>
-                {u.first_name} {u.last_name}
-              </SelectItem>
-            ))}
-            {usersByRole.telesellers.length > 0 && (
-              <div className="px-2 pt-2 pb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                Telesellers
-              </div>
-            )}
-            {usersByRole.telesellers.map((u) => (
-              <SelectItem key={u.id} value={u.id}>
-                {u.first_name} {u.last_name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select
-          value={filter.action || 'all'}
-          onValueChange={(v) => setFilter((f) => ({ ...f, action: v === 'all' ? '' : v }))}
-        >
-          <SelectTrigger className="w-44 h-9 text-sm"><SelectValue placeholder="All actions" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All actions</SelectItem>
-            {Object.entries(ACTION_META).map(([k, v]) => (
-              <SelectItem key={k} value={k}>{v.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <div className="inline-flex items-center h-9 rounded-md border bg-background overflow-hidden">
-          <span className="px-2.5 inline-flex items-center text-[10px] uppercase tracking-wider text-muted-foreground border-r h-full">
-            <CalendarDays className="h-3 w-3 mr-1" />
-            Date
-          </span>
-          <input
-            type="date"
-            value={filter.date_from}
-            onChange={(e) => setFilter((f) => ({ ...f, date_from: e.target.value }))}
-            className="h-full px-2 text-xs bg-transparent focus:outline-none w-[128px]"
-            aria-label="From"
-          />
-          <span className="text-muted-foreground text-xs px-0.5">–</span>
-          <input
-            type="date"
-            value={filter.date_to}
-            onChange={(e) => setFilter((f) => ({ ...f, date_to: e.target.value }))}
-            className="h-full px-2 text-xs bg-transparent focus:outline-none w-[128px]"
-            aria-label="To"
-          />
-        </div>
-
-        {(filter.user_id || filter.action || filter.date_from || filter.date_to) && (
+      {/* Unified horizontal filter rail — same chip system as every other list
+          page. No DynamicFilterBar: audit logs have no custom fields. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <FilterRail spec={filterSpec} filters={filters} onChange={applyFilters} />
+        {(filters.user_id || filters.action || filters.date_from || filters.date_to) && (
           <Button
             variant="ghost"
             size="sm"
-            className="ml-auto h-9 text-xs text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
-            onClick={() => setFilter({
-              role: filter.role, user_id: '', action: '', date_from: '', date_to: '',
+            className="h-8 text-xs text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
+            onClick={() => applyFilters({
+              role: filters.role, user_id: '', action: '', date_from: '', date_to: '',
             })}
           >
-            <X className="h-3.5 w-3.5 mr-1" /> Clear
+            Clear filters
           </Button>
         )}
       </div>

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import {
-  Undo2, Check, X, Clock, ExternalLink, ShieldCheck, ShieldOff,
+  Undo2, Check, X, Clock, ExternalLink, ShieldCheck, ShieldOff, CircleDot,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import toast from 'react-hot-toast';
@@ -15,9 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
+import FilterRail from '@/components/shared/FilterRail';
 
 const STATUS_META = {
   pending:   { label: 'Pending',   color: 'amber',   icon: Clock },
@@ -42,10 +40,14 @@ export default function DealRequestsPage() {
 
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState('pending');
+  // Single consolidated filter-state object (mirrors leads/page.jsx). `status`
+  // is the one backend query-param this page sends; '' (or 'all') means no filter.
+  const [filters, setFilters] = useState({ status: 'pending' });
   const [activeReview, setActiveReview] = useState(null); // request currently being reviewed
   const [reviewNotes, setReviewNotes] = useState('');
   const [submittingAction, setSubmittingAction] = useState(null); // 'approve' | 'reject' | 'cancel'
+
+  const statusFilter = filters.status || 'all';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,11 +66,44 @@ export default function DealRequestsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Live-apply: replace filter state on every rail change. No pagination here
+  // (single fixed page of 100), but resetting the list keeps parity with leads.
+  const applyFilters = useCallback((next) => {
+    setFilters(next);
+  }, []);
+
   const counts = useMemo(() => {
     const c = { pending: 0, approved: 0, rejected: 0, cancelled: 0 };
     for (const r of requests) c[r.status] = (c[r.status] || 0) + 1;
     return c;
   }, [requests]);
+
+  // Status chip spec — single-select, surfaces live counts as a label suffix
+  // when a number is meaningful (mirrors the count tiles).
+  const filterSpec = useMemo(() => {
+    const withCount = (key, label) => {
+      const n = counts[key] || 0;
+      return n > 0 ? `${label} (${n})` : label;
+    };
+    return [
+      {
+        key: 'status',
+        label: 'Status',
+        kind: 'single',
+        glyph: CircleDot,
+        tint: 'bg-amber-500/40',
+        width: 'w-[220px]',
+        allLabel: 'All statuses',
+        capitalize: false,
+        options: [
+          { value: 'pending', label: withCount('pending', 'Pending') },
+          { value: 'approved', label: withCount('approved', 'Approved') },
+          { value: 'rejected', label: withCount('rejected', 'Rejected') },
+          { value: 'cancelled', label: withCount('cancelled', 'Withdrawn') },
+        ],
+      },
+    ];
+  }, [counts]);
 
   const openReview = (req) => {
     setActiveReview(req);
@@ -117,18 +152,7 @@ export default function DealRequestsPage() {
           </p>
         </div>
 
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-44 h-9 text-sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="approved">Approved</SelectItem>
-            <SelectItem value="rejected">Rejected</SelectItem>
-            <SelectItem value="cancelled">Withdrawn</SelectItem>
-            <SelectItem value="all">All</SelectItem>
-          </SelectContent>
-        </Select>
+        <FilterRail spec={filterSpec} filters={filters} onChange={applyFilters} />
       </div>
 
       {/* Status mini-tiles — only meaningful when viewing 'all'. */}

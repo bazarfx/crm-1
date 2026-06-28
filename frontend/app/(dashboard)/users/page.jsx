@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import {
   Plus, MoreHorizontal, KeyRound, UserX, UserCheck, Trash2, LogIn, FileText,
-  RotateCcw, Search, Languages, LayoutGrid, List, Pencil, UsersRound,
+  RotateCcw, Search, Languages, LayoutGrid, List, Pencil, UsersRound, CircleDot,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { unwrap } from '@/lib/api';
@@ -32,7 +32,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { setTokens } from '@/lib/auth';
 import { DynamicFilterBar } from '@/components/dynamic/DynamicFilterBar';
-import { DynamicFilterChips } from '@/components/dynamic/DynamicFilterChips';
+import FilterRail from '@/components/shared/FilterRail';
 import { useDynamicColumns } from '@/components/dynamic/DynamicColumns';
 import { DynamicCell } from '@/components/dynamic/DynamicCell';
 import { ManageFieldsButton } from '@/components/dynamic/EditableForm';
@@ -101,6 +101,18 @@ function UsersContent() {
   // narrow by the JSONB custom_fields column.
   const [customFilters, setCustomFilters] = useState({});
 
+  // Native (non-custom-field) filters rendered as the shared chip rail. Today
+  // just account status (is_active); the role axis stays as the segmented pills
+  // above (the primary axis, like the leads status strip).
+  const [nativeFilters, setNativeFilters] = useState({});
+  const NATIVE_SPEC = useMemo(() => [
+    {
+      key: 'is_active', label: 'Status', kind: 'single', glyph: CircleDot, tint: 'bg-emerald-500/40',
+      options: [{ value: 'true', label: 'Active' }, { value: 'false', label: 'Inactive' }],
+      allLabel: 'Any status', capitalize: false, width: 'w-[220px]',
+    },
+  ], []);
+
   // Live role keys (built-ins + custom) for the drift-proof "Others" set.
   const [roleKeys, setRoleKeys] = useState(null);
   const othersRoles = useMemo(() => {
@@ -128,6 +140,10 @@ function UsersContent() {
       for (const k of Object.keys(customFilters)) {
         if (customFilters[k] !== '' && customFilters[k] != null) params[k] = customFilters[k];
       }
+      // Native status filter (active/inactive) from the chip rail.
+      if (nativeFilters.is_active === 'true' || nativeFilters.is_active === 'false') {
+        params.is_active = nativeFilters.is_active;
+      }
       const res = await api.get('/users', { params });
       const list = unwrap(res) || [];
       setUsers(list);
@@ -137,7 +153,7 @@ function UsersContent() {
     } finally {
       setLoadingActive(false);
     }
-  }, [page, limit, search, rolePill, customFilters, othersRoles]);
+  }, [page, limit, search, rolePill, customFilters, othersRoles, nativeFilters]);
 
   // Grouped-by-language view for tele_sales / senior. Falls back to the flat
   // list if /users/by-language isn't available (so the page still works on a
@@ -190,8 +206,9 @@ function UsersContent() {
 
   const activeFilters =
     !!search || rolePill !== 'all'
+    || !!nativeFilters.is_active
     || Object.keys(customFilters).some((k) => customFilters[k] !== '' && customFilters[k] != null);
-  const clearFilters = () => { setSearch(''); setRolePill('all'); setCustomFilters({}); setPage(1); };
+  const clearFilters = () => { setSearch(''); setRolePill('all'); setCustomFilters({}); setNativeFilters({}); setPage(1); };
 
   const visibleCfDefs = dynUser.customDefs.filter((d) => dynUser.visibleColumns[d.field_key]);
   // User · Role · Languages · Status · Last active · (cf…) · actions
@@ -273,7 +290,12 @@ function UsersContent() {
               />
             </div>
 
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex items-center gap-1.5">
+              <FilterRail
+                spec={NATIVE_SPEC}
+                filters={nativeFilters}
+                onChange={(next) => { setPage(1); setNativeFilters(next); }}
+              />
               <DynamicFilterBar
                 entityType="user"
                 filters={customFilters}
@@ -309,13 +331,6 @@ function UsersContent() {
               )}
             </div>
           </div>
-
-          {/* Active custom-field filter chips */}
-          <DynamicFilterChips
-            entityType="user"
-            filters={customFilters}
-            onChange={(next) => { setPage(1); setCustomFilters(next); }}
-          />
 
           {/* Grouped view */}
           {useGroupedView && byLanguage?.groups ? (

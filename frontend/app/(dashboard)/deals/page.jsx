@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { motion } from 'framer-motion';
 import {
   Award, ArrowRight, Phone, TrendingUp, Wallet, CalendarDays, Activity, X,
+  Radio, Languages, Megaphone, UsersRound, UserCheck, UserRound,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { unwrap } from '@/lib/api';
@@ -18,6 +19,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { DynamicFilterBar } from '@/components/dynamic/DynamicFilterBar';
+import FilterRail from '@/components/shared/FilterRail';
 import { useDynamicColumns } from '@/components/dynamic/DynamicColumns';
 import { DynamicCell } from '@/components/dynamic/DynamicCell';
 import { ManageFieldsButton } from '@/components/dynamic/EditableForm';
@@ -83,14 +85,10 @@ export default function DealsPage() {
   const [statsLoading, setStatsLoading] = useState(true);
 
   const [search, setSearch] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('');
-  const [closerFilter, setCloserFilter] = useState('');
-  const [assigneeFilter, setAssigneeFilter] = useState('');
-  const [groupFilter, setGroupFilter] = useState('');
-  const [campaignFilter, setCampaignFilter] = useState('');
-  const [languageFilter, setLanguageFilter] = useState('');
-  const [ftdFrom, setFtdFrom] = useState('');
-  const [ftdTo, setFtdTo] = useState('');
+  // All native filters live in one object now (keyed by the backend query-param
+  // name) and render through the shared FilterRail chip system.
+  const [filters, setFilters] = useState({});
+  const applyFilters = useCallback((next) => { setFilters(next); setPage(1); }, []);
   const [sortBy, setSortBy] = useState('ftd_at');
   const [page, setPage] = useState(1);
   const [assignees, setAssignees] = useState([]);
@@ -103,20 +101,25 @@ export default function DealsPage() {
   const [err, setErr] = useState(null);
 
   const hasActiveFilters =
-    !!(search || sourceFilter || closerFilter || assigneeFilter ||
-       groupFilter || campaignFilter || languageFilter || ftdFrom || ftdTo);
+    !!search || Object.values(filters).some((v) => v !== '' && v != null);
 
   const clearFilters = () => {
     setSearch('');
-    setSourceFilter('');
-    setCloserFilter('');
-    setAssigneeFilter('');
-    setGroupFilter('');
-    setCampaignFilter('');
-    setLanguageFilter('');
-    setFtdFrom('');
-    setFtdTo('');
+    setFilters({});
+    setPage(1);
   };
+
+  // Spec for the native filter rail. Management sees the full set; everyone
+  // else gets Source + FTD date. Keys ARE the backend query-param names.
+  const filterSpec = useMemo(() => [
+    { key: 'lead_source', label: 'Source', kind: 'single', glyph: Radio, tint: 'bg-indigo-500/40', options: sources, allLabel: 'All sources', capitalize: false, width: 'w-[240px]' },
+    isManagement && { key: 'language', label: 'Language', kind: 'single', glyph: Languages, tint: 'bg-violet-500/40', options: languages, allLabel: 'All languages' },
+    isManagement && { key: 'group_id', label: 'Group', kind: 'single', glyph: UsersRound, tint: 'bg-sky-500/40', options: groups.map((g) => ({ value: g.id, label: g.language ? `${g.name} (${g.language})` : g.name })), allLabel: 'All groups', capitalize: false, width: 'w-[280px]' },
+    isManagement && { key: 'campaign_id', label: 'Campaign', kind: 'single', glyph: Megaphone, tint: 'bg-blue-500/40', options: campaigns.map((c) => ({ value: c.id, label: c.name })), allLabel: 'All campaigns', capitalize: false, width: 'w-[300px]' },
+    isManagement && { key: 'closed_by_id', label: 'Closer', kind: 'single', glyph: UserCheck, tint: 'bg-emerald-500/40', options: assignees.map((a) => ({ value: a.id, label: `${a.first_name || ''} ${a.last_name || ''}`.trim() + (a.role === 'senior' ? ' (senior)' : '') })), allLabel: 'Closed by anyone', capitalize: false, width: 'w-[280px]' },
+    isManagement && { key: 'assignee_id', label: 'Assignee', kind: 'single', glyph: UserRound, tint: 'bg-rose-500/40', options: assignees.map((a) => ({ value: a.id, label: `${a.first_name || ''} ${a.last_name || ''}`.trim() + (a.role === 'senior' ? ' (senior)' : '') })), allLabel: 'Assigned to anyone', capitalize: false, width: 'w-[280px]' },
+    { key: 'ftd', label: 'FTD date', kind: 'daterange', glyph: CalendarDays, tint: 'bg-amber-500/40', fromKey: 'ftd_from', toKey: 'ftd_to' },
+  ].filter(Boolean), [isManagement, sources, languages, groups, campaigns, assignees]);
 
   const loadDeals = useCallback(async () => {
     setLoading(true);
@@ -128,14 +131,14 @@ export default function DealsPage() {
         sort_by: sortBy,
         sort_dir: 'DESC',
         search: search || undefined,
-        lead_source: sourceFilter || undefined,
-        closed_by_id: closerFilter || undefined,
-        assignee_id: assigneeFilter || undefined,
-        group_id: groupFilter || undefined,
-        campaign_id: campaignFilter || undefined,
-        language: languageFilter || undefined,
-        ftd_from: ftdFrom || undefined,
-        ftd_to: ftdTo || undefined,
+        lead_source: filters.lead_source || undefined,
+        closed_by_id: filters.closed_by_id || undefined,
+        assignee_id: filters.assignee_id || undefined,
+        group_id: filters.group_id || undefined,
+        campaign_id: filters.campaign_id || undefined,
+        language: filters.language || undefined,
+        ftd_from: filters.ftd_from || undefined,
+        ftd_to: filters.ftd_to || undefined,
       };
       for (const k of Object.keys(customFilters)) {
         if (customFilters[k] !== '' && customFilters[k] != null) params[k] = customFilters[k];
@@ -151,21 +154,20 @@ export default function DealsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, sortBy, search, sourceFilter, closerFilter, assigneeFilter,
-      groupFilter, campaignFilter, languageFilter, ftdFrom, ftdTo, customFilters]);
+  }, [page, sortBy, search, filters, customFilters]);
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
     try {
       const params = {
-        lead_source: sourceFilter || undefined,
-        closed_by_id: closerFilter || undefined,
-        assignee_id: assigneeFilter || undefined,
-        group_id: groupFilter || undefined,
-        campaign_id: campaignFilter || undefined,
-        language: languageFilter || undefined,
-        ftd_from: ftdFrom || undefined,
-        ftd_to: ftdTo || undefined,
+        lead_source: filters.lead_source || undefined,
+        closed_by_id: filters.closed_by_id || undefined,
+        assignee_id: filters.assignee_id || undefined,
+        group_id: filters.group_id || undefined,
+        campaign_id: filters.campaign_id || undefined,
+        language: filters.language || undefined,
+        ftd_from: filters.ftd_from || undefined,
+        ftd_to: filters.ftd_to || undefined,
       };
       const res = await api.get('/deals/stats', { params });
       setStats(unwrap(res) || null);
@@ -174,19 +176,18 @@ export default function DealsPage() {
     } finally {
       setStatsLoading(false);
     }
-  }, [sourceFilter, closerFilter, assigneeFilter, groupFilter,
-      campaignFilter, languageFilter, ftdFrom, ftdTo]);
+  }, [filters]);
 
   // Initial load + reload when filters/page/sort change.
   useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => { loadDeals(); }, [loadDeals]);
 
-  // Debounce search — reset to page 1 when typing.
+  // Reset to page 1 when the search text or sort changes (filter-chip changes
+  // already reset the page via applyFilters).
   useEffect(() => {
     const t = setTimeout(() => setPage(1), 0);
     return () => clearTimeout(t);
-  }, [search, sourceFilter, closerFilter, assigneeFilter, groupFilter,
-      campaignFilter, languageFilter, ftdFrom, ftdTo, sortBy]);
+  }, [search, sortBy]);
 
   // Load assignees list for managers' filter dropdown.
   useEffect(() => {
@@ -367,135 +368,7 @@ export default function DealsPage() {
             />
           </div>
 
-          <Select
-            value={sourceFilter || 'all'}
-            onValueChange={(v) => setSourceFilter(v === 'all' ? '' : v)}
-          >
-            <SelectTrigger className="w-36 h-9 text-sm">
-              <SelectValue placeholder="Source" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All sources</SelectItem>
-              {sources.map((s) => (
-                <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {isManagement && (
-            <>
-              <Select
-                value={languageFilter || 'all'}
-                onValueChange={(v) => setLanguageFilter(v === 'all' ? '' : v)}
-              >
-                <SelectTrigger className="w-36 h-9 text-sm">
-                  <SelectValue placeholder="Language" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All languages</SelectItem>
-                  {languages.map((l) => (
-                    <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select
-                value={groupFilter || 'all'}
-                onValueChange={(v) => setGroupFilter(v === 'all' ? '' : v)}
-              >
-                <SelectTrigger className="w-40 h-9 text-sm">
-                  <SelectValue placeholder="Group" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All groups</SelectItem>
-                  {groups.map((g) => (
-                    <SelectItem key={g.id} value={g.id}>
-                      {g.name}
-                      {g.language && (
-                        <span className="text-muted-foreground ml-1.5 capitalize">
-                          ({g.language})
-                        </span>
-                      )}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select
-                value={campaignFilter || 'all'}
-                onValueChange={(v) => setCampaignFilter(v === 'all' ? '' : v)}
-              >
-                <SelectTrigger className="w-44 h-9 text-sm">
-                  <SelectValue placeholder="Campaign" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All campaigns</SelectItem>
-                  {campaigns.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select
-                value={closerFilter || 'all'}
-                onValueChange={(v) => setCloserFilter(v === 'all' ? '' : v)}
-              >
-                <SelectTrigger className="w-40 h-9 text-sm">
-                  <SelectValue placeholder="Closer" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Closed by anyone</SelectItem>
-                  {assignees.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.first_name} {a.last_name}
-                      {a.role === 'senior' && (
-                        <span className="text-muted-foreground ml-1.5">(senior)</span>
-                      )}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select
-                value={assigneeFilter || 'all'}
-                onValueChange={(v) => setAssigneeFilter(v === 'all' ? '' : v)}
-              >
-                <SelectTrigger className="w-40 h-9 text-sm">
-                  <SelectValue placeholder="Assignee" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Assigned to anyone</SelectItem>
-                  {assignees.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.first_name} {a.last_name}
-                      {a.role === 'senior' && (
-                        <span className="text-muted-foreground ml-1.5">(senior)</span>
-                      )}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <div className="inline-flex items-center h-9 rounded-md border bg-background overflow-hidden">
-                <span className="px-2.5 text-[10px] uppercase tracking-wider text-muted-foreground border-r">FTD</span>
-                <input
-                  type="date"
-                  value={ftdFrom}
-                  onChange={(e) => setFtdFrom(e.target.value)}
-                  className="h-full px-2 text-xs bg-transparent focus:outline-none w-[128px]"
-                  aria-label="FTD from"
-                />
-                <span className="text-muted-foreground text-xs px-0.5">–</span>
-                <input
-                  type="date"
-                  value={ftdTo}
-                  onChange={(e) => setFtdTo(e.target.value)}
-                  className="h-full px-2 text-xs bg-transparent focus:outline-none w-[128px]"
-                  aria-label="FTD to"
-                />
-              </div>
-            </>
-          )}
+          <FilterRail spec={filterSpec} filters={filters} onChange={applyFilters} />
 
           <DynamicFilterBar
             entityType="deal"

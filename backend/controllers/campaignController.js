@@ -18,6 +18,7 @@ async function list(req, res) {
   const where = {};
   if (req.query.language) where.language = req.query.language;
   if (req.query.is_active !== undefined) where.is_active = req.query.is_active === 'true';
+  if (req.query.platform) where.platform = req.query.platform;
   if (req.query.search) where.name = { [Op.iLike]: `%${req.query.search}%` };
 
   const finalWhere = await applyCustomFieldFilters(where, req.query, 'Campaign', 'campaign');

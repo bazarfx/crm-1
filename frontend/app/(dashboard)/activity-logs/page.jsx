@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Activity, RefreshCw, ShieldOff, Filter, X, UserCircle2, CalendarDays } from 'lucide-react';
+import {
+  Activity, RefreshCw, ShieldOff, Filter, ShieldCheck, Boxes, Zap, UserCircle2, Calendar,
+} from 'lucide-react';
 import api, { unwrap } from '@/lib/api';
 import { useStore } from '@/store/useStore';
 import RoleGuard from '@/components/layout/RoleGuard';
@@ -11,44 +13,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-
-// Period presets — translate a single dropdown value into date_from/date_to.
-// Anchored on "now" each time the user picks one (no auto-shifting).
-const PERIOD_PRESETS = [
-  { value: 'all',     label: 'All time' },
-  { value: 'today',   label: 'Today' },
-  { value: 'week',    label: 'This week' },
-  { value: 'last7',   label: 'Last 7 days' },
-  { value: 'month',   label: 'This month' },
-  { value: 'last30',  label: 'Last 30 days' },
-];
-
-function computePeriodRange(preset) {
-  if (preset === 'all') return { date_from: null, date_to: null };
-  const now = new Date();
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-  let start;
-  if (preset === 'today') {
-    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  } else if (preset === 'week') {
-    // ISO week — Monday start. Sunday gets pulled back 6 days.
-    const day = now.getDay(); // 0 (Sun) – 6 (Sat)
-    const diff = day === 0 ? 6 : day - 1;
-    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
-  } else if (preset === 'last7') {
-    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
-  } else if (preset === 'month') {
-    start = new Date(now.getFullYear(), now.getMonth(), 1);
-  } else if (preset === 'last30') {
-    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
-  } else {
-    return { date_from: null, date_to: null };
-  }
-  return { date_from: start.toISOString(), date_to: end.toISOString() };
-}
+import FilterRail from '@/components/shared/FilterRail';
 
 // Admins can't see super_admin or other admin actions — surfacing those roles
 // in the filter would just produce empty lists, so we strip them client-side
@@ -131,26 +96,42 @@ function ActivityLogsContent() {
   const [loading, setLoading] = useState(true);
   const [visibility, setVisibility] = useState(null);
   const [focusedUser, setFocusedUser] = useState(null); // resolved User object when user_id is set
-  const [filter, setFilter] = useState({
-    role: 'all',
+  const [actorOptions, setActorOptions] = useState([]); // users for the Actor chip
+
+  // Single source of truth for every native filter. `date_from`/`date_to` are
+  // sent verbatim to the backend; the FilterRail "Created" daterange chip owns
+  // them (with built-in Today/7d/30d/This month presets).
+  const [filters, setFilters] = useState({
+    role: '',
     resource: '',
     action: '',
     user_id: initialUserId,
     search: '',
-    period: 'all',
+    date_from: '',
+    date_to: '',
   });
 
+  // Live-apply callback shared by every chip in the rail. Keeps the ?user query
+  // param in sync so a focused-user deep link survives refresh — and is dropped
+  // the moment the Actor chip is cleared.
+  const applyFilters = useCallback((next) => {
+    setFilters(next);
+    // Drop the ?user deep-link once the Actor chip is cleared. Keyed on the
+    // mount-captured id (stable) rather than the per-render searchParams object.
+    if (!next.user_id && initialUserId) router.replace('/activity-logs');
+  }, [router, initialUserId]);
+
   // When user_id is set (either via URL or by clicking "View activity"), pull
-  // the user record so the filter pill can show a name instead of a uuid.
+  // the user record so the chip can show a name instead of a uuid.
   useEffect(() => {
-    if (!filter.user_id) {
+    if (!filters.user_id) {
       setFocusedUser(null);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const res = await api.get(`/users/${filter.user_id}`);
+        const res = await api.get(`/users/${filters.user_id}`);
         const u = unwrap(res);
         if (!cancelled) setFocusedUser(u || null);
       } catch {
@@ -158,19 +139,35 @@ function ActivityLogsContent() {
       }
     })();
     return () => { cancelled = true; };
-  }, [filter.user_id]);
+  }, [filters.user_id]);
+
+  // Populate the Actor single-select with selectable users. Admins get every
+  // actor they're allowed to audit; the backend already hides admin/super-admin
+  // actors from admin viewers, so this list mirrors what they can filter by.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get('/users', { params: { limit: 500, is_active: true } });
+        const list = unwrap(res) || [];
+        if (!cancelled) setActorOptions(Array.isArray(list) ? list : []);
+      } catch {
+        if (!cancelled) setActorOptions([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const loadLogs = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (filter.role && filter.role !== 'all') params.append('role', filter.role);
-      if (filter.resource) params.append('resource', filter.resource);
-      if (filter.action) params.append('action', filter.action);
-      if (filter.user_id) params.append('user_id', filter.user_id);
-      const { date_from, date_to } = computePeriodRange(filter.period);
-      if (date_from) params.append('date_from', date_from);
-      if (date_to) params.append('date_to', date_to);
+      if (filters.role) params.append('role', filters.role);
+      if (filters.resource) params.append('resource', filters.resource);
+      if (filters.action) params.append('action', filters.action);
+      if (filters.user_id) params.append('user_id', filters.user_id);
+      if (filters.date_from) params.append('date_from', filters.date_from);
+      if (filters.date_to) params.append('date_to', filters.date_to);
       params.append('limit', '200');
       const res = await api.get(`/audit-logs/all?${params}`);
       const data = unwrap(res) || {};
@@ -181,28 +178,71 @@ function ActivityLogsContent() {
     } finally {
       setLoading(false);
     }
-  }, [filter.role, filter.resource, filter.action, filter.user_id, filter.period]);
+  }, [filters.role, filters.resource, filters.action, filters.user_id, filters.date_from, filters.date_to]);
 
   useEffect(() => { loadLogs(); }, [loadLogs]);
 
-  const clearUserFilter = () => {
-    setFilter((f) => ({ ...f, user_id: '' }));
-    // Drop the ?user= query param so a refresh doesn't bring it back.
-    if (sp?.get('user')) router.replace('/activity-logs');
-  };
+  // Options for the Actor chip — name (or email) per user, capped to keep the
+  // popover snappy. The focused user is folded in so a deep-linked id always has
+  // a readable label even if it's outside the first page of users.
+  const actorChipOptions = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    const push = (u) => {
+      if (!u?.id || seen.has(u.id)) return;
+      seen.add(u.id);
+      const name = `${u.first_name || ''} ${u.last_name || ''}`.trim();
+      out.push({ value: u.id, label: name ? `${name}${u.email ? ` · ${u.email}` : ''}` : (u.email || u.id) });
+    };
+    if (focusedUser) push(focusedUser);
+    actorOptions.forEach(push);
+    return out;
+  }, [actorOptions, focusedUser]);
+
+  // Role chip options — drop the synthetic "all" entry (FilterRail renders its
+  // own All radio); the gating between super-admin and admin viewers is
+  // preserved via ROLE_OPTIONS_SUPER_ADMIN / ROLE_OPTIONS_ADMIN.
+  const roleChipOptions = useMemo(
+    () => roleOptions.filter((r) => r.value !== 'all'),
+    [roleOptions],
+  );
+
+  const filterSpec = useMemo(() => [
+    { key: 'role', label: 'Role', kind: 'single', glyph: ShieldCheck, tint: 'bg-violet-500/40', options: roleChipOptions, allLabel: 'Every role', width: 'w-[240px]' },
+    {
+      key: 'resource', label: 'Resource', kind: 'single', glyph: Boxes, tint: 'bg-indigo-500/40', allLabel: 'All resources',
+      options: [
+        { value: 'Lead', label: 'Leads' },
+        { value: 'User', label: 'Users' },
+        { value: 'Group', label: 'Groups' },
+        { value: 'Campaign', label: 'Campaigns' },
+        { value: 'Setting', label: 'Settings' },
+        { value: 'RolePermission', label: 'Role permissions' },
+      ],
+    },
+    {
+      key: 'action', label: 'Action', kind: 'single', glyph: Zap, tint: 'bg-blue-500/40', allLabel: 'All actions', width: 'w-[260px]',
+      options: Object.entries(ACTION_LABELS).map(([value, v]) => ({ value, label: v.label })),
+    },
+    {
+      key: 'user_id', label: 'Actor', kind: 'single', glyph: UserCircle2, tint: 'bg-teal-500/40', allLabel: 'Everyone',
+      options: actorChipOptions, width: 'w-[300px]', capitalize: false,
+    },
+    { key: 'created', fromKey: 'date_from', toKey: 'date_to', label: 'Created', kind: 'daterange', glyph: Calendar, tint: 'bg-amber-500/40' },
+  ], [roleChipOptions, actorChipOptions]);
 
   // Lightweight client-side text search across user name + email so admins can
   // jump to a specific actor without paginating. Server still does the heavy
   // role + resource + action filtering.
   const filteredLogs = useMemo(() => {
-    if (!filter.search) return logs;
-    const needle = filter.search.toLowerCase();
+    if (!filters.search) return logs;
+    const needle = filters.search.toLowerCase();
     return logs.filter((l) =>
       (l.user_name || '').toLowerCase().includes(needle)
       || (l.user_email || '').toLowerCase().includes(needle)
       || (l.action || '').toLowerCase().includes(needle)
       || (l.resource || '').toLowerCase().includes(needle));
-  }, [logs, filter.search]);
+  }, [logs, filters.search]);
 
   const renderDiff = (log) => {
     if (log.action === 'ASSIGN_LEAD' || log.action === 'REASSIGN_LEAD') {
@@ -306,122 +346,22 @@ function ActivityLogsContent() {
         </div>
       )}
 
-      {/* Focused-user pill — surfaces clearly when arriving from a "View activity" click */}
-      {filter.user_id && (
-        <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2 min-w-0">
-            <UserCircle2 className="h-4 w-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-            <div className="min-w-0">
-              <p className="text-xs text-blue-700/80 dark:text-blue-300/80">Showing activity for</p>
-              <p className="text-sm font-medium truncate">
-                {focusedUser
-                  ? `${focusedUser.first_name || ''} ${focusedUser.last_name || ''}`.trim() || focusedUser.email
-                  : 'Loading…'}
-                {focusedUser?.role && (
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      'ml-2 text-[9px] h-4 px-1 leading-none align-middle capitalize',
-                      ROLE_BADGE[focusedUser.role] || 'text-muted-foreground',
-                    )}
-                  >
-                    {focusedUser.role.replace(/_/g, ' ')}
-                  </Badge>
-                )}
-              </p>
-              {focusedUser?.email && (
-                <p className="text-[10px] text-muted-foreground font-mono truncate">{focusedUser.email}</p>
-              )}
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs gap-1"
-            onClick={clearUserFilter}
-          >
-            <X className="h-3 w-3" /> Show everyone
-          </Button>
+      {/* Filters — search expands on its own line; the chip rail carries the
+          structured filters (Role, Resource, Action, Actor, Created) and matches
+          every other CRM list page. Visibility metadata drops to its own line so
+          it never compresses the controls into a stack. */}
+      <div className="space-y-2.5">
+        <div className="relative max-w-md">
+          <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={filters.search}
+            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+            placeholder="Search user, email, action…"
+            className="pl-8 h-9"
+          />
         </div>
-      )}
 
-      {/* Filters — search expands; the rest is a row of equal-height pickers
-          inside a single card border. Visibility metadata drops to its own line
-          so it never compresses the controls into a stack. */}
-      <div className="space-y-2">
-        <div className="rounded-xl border bg-card p-2.5 flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[200px]">
-            <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              value={filter.search}
-              onChange={(e) => setFilter((f) => ({ ...f, search: e.target.value }))}
-              placeholder="Search user, email, action…"
-              className="pl-8 h-9"
-            />
-          </div>
-
-          <Select
-            value={filter.role}
-            onValueChange={(v) => setFilter((f) => ({ ...f, role: v }))}
-          >
-            <SelectTrigger className="w-40 h-9 text-sm">
-              <SelectValue placeholder="Role" />
-            </SelectTrigger>
-            <SelectContent>
-              {roleOptions.map((r) => (
-                <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Select
-            value={filter.resource || 'all'}
-            onValueChange={(v) => setFilter((f) => ({ ...f, resource: v === 'all' ? '' : v }))}
-          >
-            <SelectTrigger className="w-40 h-9 text-sm">
-              <SelectValue placeholder="Resource" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All resources</SelectItem>
-              <SelectItem value="Lead">Leads</SelectItem>
-              <SelectItem value="User">Users</SelectItem>
-              <SelectItem value="Group">Groups</SelectItem>
-              <SelectItem value="Campaign">Campaigns</SelectItem>
-              <SelectItem value="Setting">Settings</SelectItem>
-              <SelectItem value="RolePermission">Role permissions</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Select
-            value={filter.action || 'all'}
-            onValueChange={(v) => setFilter((f) => ({ ...f, action: v === 'all' ? '' : v }))}
-          >
-            <SelectTrigger className="w-48 h-9 text-sm">
-              <SelectValue placeholder="Action" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All actions</SelectItem>
-              {Object.entries(ACTION_LABELS).map(([k, v]) => (
-                <SelectItem key={k} value={k}>{v.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Select
-            value={filter.period}
-            onValueChange={(v) => setFilter((f) => ({ ...f, period: v }))}
-          >
-            <SelectTrigger className="w-40 h-9 text-sm">
-              <CalendarDays className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />
-              <SelectValue placeholder="Period" />
-            </SelectTrigger>
-            <SelectContent>
-              {PERIOD_PRESETS.map((p) => (
-                <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <FilterRail spec={filterSpec} filters={filters} onChange={applyFilters} />
 
         {visibility && (
           <p className="text-[10px] text-muted-foreground px-1">

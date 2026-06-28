@@ -2,6 +2,15 @@ const { Op } = require('sequelize');
 const { AuditLog, User, Lead } = require('../models');
 const { success } = require('../utils/responseHelper');
 
+// A bare 'YYYY-MM-DD' date_to parses as midnight UTC, which would exclude rows
+// created later that same day. Widen it to the inclusive end of the day so the
+// chip-rail date pickers behave as "through this date". Full timestamps pass
+// through untouched.
+function endOfDay(d) {
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) return new Date(`${d}T23:59:59.999Z`);
+  return new Date(d);
+}
+
 // GET /api/v1/audit-logs/admin-actions
 // Super-admin oversight: every action performed by admin role users.
 async function adminActions(req, res) {
@@ -38,7 +47,7 @@ async function adminActions(req, res) {
   if (date_from || date_to) {
     where.created_at = {};
     if (date_from) where.created_at[Op.gte] = new Date(date_from);
-    if (date_to) where.created_at[Op.lte] = new Date(date_to);
+    if (date_to) where.created_at[Op.lte] = endOfDay(date_to);
   }
 
   const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
@@ -169,7 +178,7 @@ async function salesActivity(req, res) {
   if (date_from || date_to) {
     where.created_at = {};
     if (date_from) where.created_at[Op.gte] = new Date(date_from);
-    if (date_to) where.created_at[Op.lte] = new Date(date_to);
+    if (date_to) where.created_at[Op.lte] = endOfDay(date_to);
   }
 
   const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
@@ -318,7 +327,7 @@ async function allActivity(req, res) {
   if (date_from || date_to) {
     where.created_at = {};
     if (date_from) where.created_at[Op.gte] = new Date(date_from);
-    if (date_to) where.created_at[Op.lte] = new Date(date_to);
+    if (date_to) where.created_at[Op.lte] = endOfDay(date_to);
   }
 
   const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);

@@ -1,17 +1,24 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Eye, RefreshCw, X } from 'lucide-react';
+import { Eye, RefreshCw, Boxes, Activity, Calendar, UserCog } from 'lucide-react';
 import api, { unwrap } from '@/lib/api';
 import RoleGuard from '@/components/layout/RoleGuard';
 import { cn } from '@/lib/utils';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
+import FilterRail from '@/components/shared/FilterRail';
+
+const RESOURCE_OPTIONS = [
+  { value: 'Lead', label: 'Leads' },
+  { value: 'User', label: 'Users' },
+  { value: 'Group', label: 'Groups' },
+  { value: 'Campaign', label: 'Campaigns' },
+  { value: 'Setting', label: 'Settings' },
+  { value: 'RolePermission', label: 'Role permissions' },
+];
 
 const ACTION_LABELS = {
   ASSIGN_LEAD:              { label: 'Lead reassigned',       color: 'amber' },
@@ -52,19 +59,46 @@ function AdminActionsContent() {
   const initialUserId = sp?.get('user') || '';
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState({
+  const [admins, setAdmins] = useState([]);
+  // Single consolidated filter state (mirrors leads/page.jsx). Date range uses
+  // date_from/date_to so the daterange chip's built-in presets wire up directly.
+  const [filters, setFilters] = useState({
     resource: '',
     action: '',
     admin_id: initialUserId,
+    date_from: '',
+    date_to: '',
   });
+
+  // Live-apply: update state on every chip change. Pagination here is a fixed
+  // 100-row window, so there's no page index to reset — the dep-array refetch
+  // fires on the new filters.
+  const applyFilters = (next) => setFilters(next);
+
+  // Admin users — powers the Admin User chip + resolves the deep-linked ?user
+  // id into a readable name in the chip summary.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get('/users', { params: { role: 'admin', limit: 200 } });
+        const p = unwrap(res);
+        const list = Array.isArray(p) ? p : (p?.data || []);
+        setAdmins(list);
+      } catch (e) {
+        console.error('[admin-actions] failed to fetch admins', e);
+      }
+    })();
+  }, []);
 
   const loadLogs = async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (filter.resource) params.append('resource', filter.resource);
-      if (filter.action) params.append('action', filter.action);
-      if (filter.admin_id) params.append('admin_id', filter.admin_id);
+      if (filters.resource) params.append('resource', filters.resource);
+      if (filters.action) params.append('action', filters.action);
+      if (filters.admin_id) params.append('admin_id', filters.admin_id);
+      if (filters.date_from) params.append('date_from', filters.date_from);
+      if (filters.date_to) params.append('date_to', filters.date_to);
       params.append('limit', '100');
       const res = await api.get(`/audit-logs/admin-actions?${params}`);
       const data = unwrap(res) || {};
@@ -79,7 +113,41 @@ function AdminActionsContent() {
   useEffect(() => {
     loadLogs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter.resource, filter.action, filter.admin_id]);
+  }, [filters.resource, filters.action, filters.admin_id, filters.date_from, filters.date_to]);
+
+  // Admin-user options. If the deep-linked id isn't in the fetched admin list
+  // (e.g. the focused user isn't an admin), surface it anyway so the chip stays
+  // populated and clearable.
+  const adminOptions = useMemo(() => {
+    const opts = admins.map((u) => ({
+      value: u.id,
+      label: u.name || u.full_name || u.email || String(u.id).slice(0, 8),
+    }));
+    if (filters.admin_id && !opts.some((o) => o.value === filters.admin_id)) {
+      opts.unshift({ value: filters.admin_id, label: `${String(filters.admin_id).slice(0, 8)}…` });
+    }
+    return opts;
+  }, [admins, filters.admin_id]);
+
+  const filterSpec = useMemo(() => [
+    {
+      key: 'resource', label: 'Resource', kind: 'single', glyph: Boxes, tint: 'bg-violet-500/40',
+      options: RESOURCE_OPTIONS, allLabel: 'All resources', capitalize: false, width: 'w-[260px]',
+    },
+    {
+      key: 'action', label: 'Action', kind: 'single', glyph: Activity, tint: 'bg-indigo-500/40',
+      options: Object.entries(ACTION_LABELS).map(([k, v]) => ({ value: k, label: v.label })),
+      allLabel: 'All actions', capitalize: false, width: 'w-[280px]',
+    },
+    {
+      key: 'created', fromKey: 'date_from', toKey: 'date_to', label: 'Created',
+      kind: 'daterange', glyph: Calendar, tint: 'bg-amber-500/40',
+    },
+    {
+      key: 'admin_id', label: 'Admin user', kind: 'single', glyph: UserCog, tint: 'bg-teal-500/40',
+      options: adminOptions, allLabel: 'All admins', capitalize: false, width: 'w-[280px]',
+    },
+  ], [adminOptions]);
 
   const renderDiff = (log) => {
     if (log.action === 'ASSIGN_LEAD' || log.action === 'REASSIGN_LEAD') {
@@ -158,58 +226,9 @@ function AdminActionsContent() {
         </Button>
       </div>
 
-      {/* Filters — grouped row matching the rest of the app: equal-height
-          pickers in a single bordered bar, clear action right-anchored. */}
-      <div className="rounded-xl border bg-card p-2.5 flex flex-wrap items-center gap-2">
-        <Select
-          value={filter.resource || 'all'}
-          onValueChange={(v) => setFilter({ ...filter, resource: v === 'all' ? '' : v })}
-        >
-          <SelectTrigger className="w-44 h-9 text-sm">
-            <SelectValue placeholder="All resources" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All resources</SelectItem>
-            <SelectItem value="Lead">Leads</SelectItem>
-            <SelectItem value="User">Users</SelectItem>
-            <SelectItem value="Group">Groups</SelectItem>
-            <SelectItem value="Campaign">Campaigns</SelectItem>
-            <SelectItem value="Setting">Settings</SelectItem>
-            <SelectItem value="RolePermission">Role permissions</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Select
-          value={filter.action || 'all'}
-          onValueChange={(v) => setFilter({ ...filter, action: v === 'all' ? '' : v })}
-        >
-          <SelectTrigger className="w-52 h-9 text-sm">
-            <SelectValue placeholder="All actions" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All actions</SelectItem>
-            {Object.entries(ACTION_LABELS).map(([k, v]) => (
-              <SelectItem key={k} value={k}>{v.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {filter.admin_id && (
-          <div className="ml-auto inline-flex items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Focused on user
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-9 text-xs text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
-              onClick={() => setFilter({ ...filter, admin_id: '' })}
-            >
-              <X className="h-3.5 w-3.5 mr-1" /> Clear
-            </Button>
-          </div>
-        )}
-      </div>
+      {/* Unified horizontal filter-chip rail — the focused user (deep-linked
+          ?user) is now represented as the Admin user chip value. */}
+      <FilterRail spec={filterSpec} filters={filters} onChange={applyFilters} />
 
       <Card>
         <CardContent className="p-0 overflow-x-auto">
