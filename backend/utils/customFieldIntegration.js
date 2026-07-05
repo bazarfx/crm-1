@@ -42,7 +42,18 @@ async function processIncomingCustomFields(entity_type, body, existingRecord = n
     };
   }
 
-  const { value, errors } = await validateAndCoerce(entity_type, incoming, existing);
+  // Native column snapshot for conditional-field evaluation. Conditions may
+  // reference a native column (e.g. lead_status) — resolve them against the
+  // existing row merged with any native fields in the incoming body. Strip
+  // custom_fields itself so it can't shadow the custom-value map.
+  const existingNative = existingRecord
+    ? (typeof existingRecord.toJSON === 'function' ? existingRecord.toJSON() : existingRecord)
+    : {};
+  const { custom_fields: _ecf, ...existingNativeCols } = existingNative || {};
+  const { custom_fields: _bcf, ...bodyNativeCols } = (body || {});
+  const nativeValues = { ...existingNativeCols, ...bodyNativeCols };
+
+  const { value, errors } = await validateAndCoerce(entity_type, incoming, existing, nativeValues);
   return { custom_fields: value, errors };
 }
 

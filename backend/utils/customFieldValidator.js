@@ -1,4 +1,5 @@
 const { FieldDefinition } = require('../models');
+const { isFieldVisible } = require('./conditions');
 
 // ─── 30-second TTL cache ─────────────────────────────────────────────────
 // Custom-field definitions barely change at runtime; refetching them on every
@@ -135,11 +136,28 @@ function runValidation(def, value) {
 // Returns { value, errors }. The caller decides whether to reject on errors
 // or write the partial. `existing` is the row's current custom_fields blob;
 // `incoming` is the patch from the request body.
-async function validateAndCoerce(entity_type, incoming = {}, existing = {}) {
+// `nativeValues` (optional) is the record's native column snapshot (existing
+// row + incoming native patch). Conditional fields (`visibility_condition`) may
+// reference a native column (e.g. lead_status) OR another custom field, so we
+// build ONE merged value map (native → existing custom → incoming custom) and
+// resolve every condition against it. A field whose condition is unmet is
+// HIDDEN — neither required nor validated.
+async function validateAndCoerce(entity_type, incoming = {}, existing = {}, nativeValues = {}) {
   await ensureCache();
   const defs = cache[entity_type] || {};
   const errors = [];
   const merged = { ...existing };
+
+  // Merged value map for condition evaluation. Custom fields win over native
+  // columns of the same name; incoming custom wins over existing custom.
+  // Rebuilt after coercions below so conditions see the latest custom values,
+  // but this snapshot is enough for the required/backfill gates (native cols
+  // and pre-existing custom values are what conditions almost always key on).
+  const conditionValues = {
+    ...(nativeValues && typeof nativeValues === 'object' ? nativeValues : {}),
+    ...existing,
+    ...incoming,
+  };
 
   for (const [key, value] of Object.entries(incoming)) {
     const def = defs[key];
@@ -149,7 +167,9 @@ async function validateAndCoerce(entity_type, incoming = {}, existing = {}) {
     }
 
     if (value === null || value === undefined || value === '') {
-      if (def.is_required && !(key in existing)) {
+      // A hidden field is neither required nor validated — skip the required
+      // gate entirely when its visibility condition is unmet.
+      if (def.is_required && !(key in existing) && isFieldVisible(def, conditionValues)) {
         errors.push(`${def.label} is required`);
         continue;
       }
@@ -173,9 +193,16 @@ async function validateAndCoerce(entity_type, incoming = {}, existing = {}) {
   }
 
   // Backfill defaults for required fields that the row doesn't yet have a
-  // value for AND that the caller didn't try to set.
+  // value for AND that the caller didn't try to set — but ONLY for fields
+  // that are currently visible. A hidden required field must not be
+  // silently defaulted into the record.
   for (const def of Object.values(defs)) {
-    if (def.is_required && !(def.field_key in merged) && !(def.field_key in incoming)) {
+    if (
+      def.is_required
+      && !(def.field_key in merged)
+      && !(def.field_key in incoming)
+      && isFieldVisible(def, conditionValues)
+    ) {
       if (def.default_value !== null && def.default_value !== undefined) {
         merged[def.field_key] = def.default_value;
       }

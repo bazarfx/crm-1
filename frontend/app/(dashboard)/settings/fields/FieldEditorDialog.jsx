@@ -28,8 +28,33 @@ import {
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { DynamicField } from '@/components/dynamic/DynamicField';
 import api from '@/lib/api';
-import { invalidateFieldDefinitions } from '@/lib/dynamic';
+import { invalidateFieldDefinitions, fetchFieldDefinitions } from '@/lib/dynamic';
+import {
+  OPERATORS_BY_TYPE, typeFamily, operatorsFor, defaultOperator,
+  isValueless, isRange, isMultiValue,
+} from '@/lib/filterOperators';
 import { cn } from '@/lib/utils';
+
+// Key native columns that a conditional field can key on, per entity. These are
+// real columns of the entity (not custom fields) so a condition can say e.g.
+// "show only when lead_status is any_of [account_opened]". Choice options are a
+// static fallback lineup; the operator family is what actually drives the UI.
+const NATIVE_CONDITION_FIELDS = {
+  lead: [
+    {
+      field: 'lead_status', label: 'Status', field_type: 'dropdown',
+      options: [
+        'new', 'contacted', 'interested', 'not_interested', 'call_back',
+        'account_opened', 'ftd_done', 'cold', 'dnd', 'inactive', 'reactive',
+      ].map((v) => ({ value: v, label: v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) })),
+    },
+    {
+      field: 'language', label: 'Language', field_type: 'dropdown',
+      options: ['English', 'Hindi', 'Tamil', 'Telugu', 'Kannada', 'Marathi', 'Gujarati']
+        .map((v) => ({ value: v.toLowerCase(), label: v })),
+    },
+  ],
+};
 
 const TYPES = [
   'text', 'long_text', 'number', 'currency', 'percent',
@@ -112,6 +137,7 @@ function FieldEditorCore({ field, entityType, initialType, layout = 'dialog', on
           : [],
         validation: {},
         default_value: null,
+        visibility_condition: null,
         helper_text: '',
         section: 'Custom',
         is_required: false,
@@ -128,6 +154,34 @@ function FieldEditorCore({ field, entityType, initialType, layout = 'dialog', on
       setUsage(null);
     }
   }, [field, entityType, isEdit, initialType]);
+
+  // Sibling field definitions for the same entity — the pool of OTHER custom
+  // fields a conditional-visibility rule can key on. Loaded once per entity.
+  const [siblingDefs, setSiblingDefs] = useState([]);
+  const effectiveEntity = entityType || form.entity_type;
+  useEffect(() => {
+    if (!effectiveEntity) return;
+    fetchFieldDefinitions({ entity_type: effectiveEntity })
+      .then((defs) => setSiblingDefs(Array.isArray(defs) ? defs : []))
+      .catch(() => setSiblingDefs([]));
+  }, [effectiveEntity]);
+
+  // Candidate driver fields for the "only show when…" picker: every OTHER
+  // non-archived custom field of this entity, plus the key native columns.
+  // The field being edited is excluded so a field can't depend on itself.
+  const conditionFieldCatalog = useMemo(() => {
+    const natives = (NATIVE_CONDITION_FIELDS[effectiveEntity] || []).map((f) => ({
+      field: f.field, label: f.label, field_type: f.field_type,
+      options: f.options || [], source: 'native',
+    }));
+    const customs = (siblingDefs || [])
+      .filter((d) => d && !d.is_archived && d.field_key !== form.field_key)
+      .map((d) => ({
+        field: d.field_key, label: d.label, field_type: d.field_type,
+        options: d.options || [], source: 'custom',
+      }));
+    return [...natives, ...customs];
+  }, [effectiveEntity, siblingDefs, form.field_key]);
 
   const setF = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -634,6 +688,18 @@ function FieldEditorCore({ field, entityType, initialType, layout = 'dialog', on
                   onCheckedChange={v => setF('is_visible_in_list', v)}
                 />
               </div>
+            </FormSection>
+
+            <FormSection
+              icon={Eye}
+              title="Conditional visibility"
+              description="Show this field only when another field meets a condition."
+            >
+              <ConditionEditor
+                condition={form.visibility_condition}
+                onChange={(vc) => setF('visibility_condition', vc)}
+                catalog={conditionFieldCatalog}
+              />
             </FormSection>
 
             <FormSection
@@ -1154,6 +1220,255 @@ function DefaultValueEditor({ form, setF }) {
         placeholder="Leave blank for no default"
       />
     </Wrap>
+  );
+}
+
+/**
+ * Conditional-visibility editor (Zoho "basic conditions"). A switch reveals a
+ * [Field ▾][Operator ▾][value] row. Serializes to `visibility_condition`:
+ *   { field, operator, value?, value2? } | null   (null when the switch is off).
+ *
+ *  - Field  → the OTHER fields of the same entity (custom + key native cols),
+ *             supplied via `catalog`.
+ *  - Operator → OPERATORS_BY_TYPE[typeFamily(selectedField.field_type)].
+ *  - Value  → a type-aware input mirroring AdvancedFilterPanel's ValueInput;
+ *             omitted for the valueless operators (is_empty / is_not_empty).
+ *
+ * The existing condition is loaded from `condition` when editing.
+ */
+function ConditionEditor({ condition, onChange, catalog }) {
+  const enabled = !!(condition && condition.field);
+  const selected = enabled
+    ? catalog.find((f) => f.field === condition.field)
+    : null;
+
+  const toggle = (on) => {
+    if (!on) { onChange(null); return; }
+    // Seed with the first available driver field + its default operator.
+    const first = catalog[0];
+    if (!first) { onChange(null); return; }
+    onChange({
+      field: first.field,
+      operator: defaultOperator(first.field_type),
+      value: typeFamily(first.field_type) === 'choice' ? [] : '',
+    });
+  };
+
+  const changeField = (fieldKey) => {
+    const f = catalog.find((c) => c.field === fieldKey);
+    if (!f) return;
+    onChange({
+      field: f.field,
+      operator: defaultOperator(f.field_type),
+      value: typeFamily(f.field_type) === 'choice' ? [] : '',
+    });
+  };
+
+  const changeOperator = (operator) => {
+    onChange({
+      ...condition,
+      operator,
+      // Drop value2 when leaving a range operator; clear value for valueless.
+      value: isValueless(operator) ? undefined : condition.value,
+      value2: isRange(operator) ? condition.value2 : undefined,
+    });
+  };
+
+  const changeValue = (patch) => onChange({ ...condition, ...patch });
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-card">
+      <div className="flex items-center justify-between gap-4 px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-foreground">Only show this field when…</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            Hidden fields are never required and never validated.
+          </p>
+        </div>
+        <Switch checked={enabled} onCheckedChange={toggle} />
+      </div>
+
+      {enabled && (
+        <div className="border-t border-border/60 px-4 py-3 space-y-2.5">
+          {catalog.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground italic">
+              No other fields on this entity yet — add another field first to
+              build a condition.
+            </p>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {/* Driver field */}
+                <div className="space-y-1">
+                  <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Field</Label>
+                  <Select value={condition.field} onValueChange={changeField}>
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue placeholder="Pick a field…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {catalog.map((f) => (
+                        <SelectItem key={`${f.source}:${f.field}`} value={f.field}>
+                          {f.label}
+                          <span className="ml-1.5 text-[9px] text-muted-foreground uppercase">{f.source}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Operator */}
+                <div className="space-y-1">
+                  <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Operator</Label>
+                  <Select value={condition.operator} onValueChange={changeOperator}>
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue placeholder="Operator…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(operatorsFor(selected?.field_type || 'text')).map((op) => (
+                        <SelectItem key={op.value} value={op.value}>{op.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Type-aware value input — hidden for valueless operators. */}
+              {!isValueless(condition.operator) && (
+                <div className="space-y-1">
+                  <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Value</Label>
+                  <ConditionValueInput
+                    field={selected || { field_type: 'text', options: [] }}
+                    operator={condition.operator}
+                    value={condition.value}
+                    value2={condition.value2}
+                    onChange={changeValue}
+                  />
+                </div>
+              )}
+
+              <p className="text-[10px] text-muted-foreground">
+                This field appears only when{' '}
+                <span className="font-medium text-foreground">{selected?.label || condition.field}</span>{' '}
+                {(operatorsFor(selected?.field_type || 'text').find((o) => o.value === condition.operator)?.label) || condition.operator}
+                {!isValueless(condition.operator) && <> the value above</>}.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Type-aware value input for a single condition. Mirrors AdvancedFilterPanel's
+// ValueInput: boolean → Yes/No segmented, choice → multi-select checklist,
+// number/date/text → a plain input, range → a pair. `field.field_type` drives
+// the family; the caller already hid this for is_empty / is_not_empty.
+function ConditionValueInput({ field, operator, value, value2, onChange }) {
+  const family = typeFamily(field.field_type);
+
+  if (family === 'boolean') {
+    const seg = (id, label) => (
+      <button
+        key={id} type="button"
+        onClick={() => onChange({ value: id })}
+        className={cn(
+          'flex-1 h-9 text-xs rounded border transition-colors',
+          value === id
+            ? 'bg-foreground text-background border-foreground font-medium'
+            : 'bg-background border-border text-muted-foreground hover:bg-muted',
+        )}
+      >
+        {label}
+      </button>
+    );
+    return <div className="flex gap-1.5 w-full">{seg('true', 'Yes')}{seg('false', 'No')}</div>;
+  }
+
+  if (family === 'choice' && isMultiValue(operator)) {
+    const selected = Array.isArray(value) ? value : [];
+    const toggle = (v) =>
+      onChange({ value: selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v] });
+    const opts = field.options || [];
+    if (opts.length === 0) {
+      return (
+        <Input
+          value={Array.isArray(value) ? value.join(', ') : (value ?? '')}
+          onChange={(e) => onChange({ value: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
+          placeholder="Comma-separated values…"
+          className="h-9 text-xs"
+        />
+      );
+    }
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {opts.map((o) => {
+          const on = selected.includes(o.value);
+          return (
+            <button
+              key={o.value} type="button" onClick={() => toggle(o.value)}
+              className={cn(
+                'px-2.5 py-1 text-[11px] rounded border transition-colors',
+                on
+                  ? 'bg-primary/10 border-primary/40 text-primary font-medium'
+                  : 'bg-transparent border-border text-muted-foreground hover:bg-muted',
+              )}
+            >
+              {on && <Check className="h-3 w-3 inline mr-1" />}
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const inputType = family === 'date'
+    ? (field.field_type === 'datetime' ? 'datetime-local' : 'date')
+    : family === 'number' ? 'number' : 'text';
+  const step = field.field_type === 'percent' ? '0.1' : undefined;
+
+  if (isRange(operator)) {
+    return (
+      <div className="grid grid-cols-2 gap-1.5 w-full">
+        <Input
+          type={inputType} step={step} value={value ?? ''} placeholder={family === 'number' ? 'Min' : 'From'}
+          onChange={(e) => onChange({ value: e.target.value, value2 })}
+          className="h-9 text-xs"
+        />
+        <Input
+          type={inputType} step={step} value={value2 ?? ''} placeholder={family === 'number' ? 'Max' : 'To'}
+          onChange={(e) => onChange({ value, value2: e.target.value })}
+          className="h-9 text-xs"
+        />
+      </div>
+    );
+  }
+
+  // Single dropdown value for a choice field with a non-multi operator (rare,
+  // but keeps parity). Otherwise a plain typed input.
+  if (family === 'choice' && (field.options || []).length > 0) {
+    return (
+      <Select value={value ?? ''} onValueChange={(v) => onChange({ value: v })}>
+        <SelectTrigger className="h-9 text-xs">
+          <SelectValue placeholder="Select…" />
+        </SelectTrigger>
+        <SelectContent>
+          {(field.options || []).map((o) => (
+            <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  return (
+    <Input
+      type={inputType} step={step} value={value ?? ''}
+      onChange={(e) => onChange({ value: e.target.value })}
+      placeholder="Value…"
+      className="h-9 text-xs"
+    />
   );
 }
 

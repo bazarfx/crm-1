@@ -27,6 +27,32 @@ const ENTITY_MODEL_MAP = {
   lead_activity: 'LeadActivity',
 };
 
+// Normalize an incoming `visibility_condition`. Zoho "basic condition" shape:
+//   { field: '<field_key|native_col>', operator: '<op>', value: <any> } | null
+// null = always visible. We coerce an empty object / blank field to null (the
+// editor sends {} when the "only show when…" switch is off), and reject a
+// non-null value that isn't an object carrying a non-empty string `field`.
+// Returns { value } on success or { error } on a bad shape.
+function normalizeVisibilityCondition(raw) {
+  if (raw === undefined) return { value: undefined }; // caller: leave untouched
+  if (raw === null) return { value: null };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { error: 'visibility_condition must be null or an object' };
+  }
+  // Empty object OR missing/blank field → treat as "no condition".
+  if (!raw.field || typeof raw.field !== 'string' || !raw.field.trim()) {
+    if (Object.keys(raw).length === 0) return { value: null };
+    return { error: 'visibility_condition.field must be a non-empty string' };
+  }
+  if (!raw.operator || typeof raw.operator !== 'string') {
+    return { error: 'visibility_condition.operator must be a string' };
+  }
+  const cond = { field: raw.field, operator: raw.operator };
+  if ('value' in raw) cond.value = raw.value;
+  if ('value2' in raw) cond.value2 = raw.value2;
+  return { value: cond };
+}
+
 // Names we will not let an admin shadow with a custom field — would collide
 // with native Sequelize columns and silently break list/sort queries.
 const RESERVED_KEYS = new Set([
@@ -112,6 +138,13 @@ exports.create = async (req, res) => {
       return error(res, `"${payload.field_key}" is a reserved field name`, 400);
     }
 
+    // Conditional visibility (optional). Coerce {} → null; validate shape.
+    if ('visibility_condition' in payload) {
+      const vc = normalizeVisibilityCondition(payload.visibility_condition);
+      if (vc.error) return error(res, vc.error, 400);
+      payload.visibility_condition = vc.value;
+    }
+
     if (['dropdown', 'multiselect'].includes(payload.field_type)) {
       if (!Array.isArray(payload.options) || payload.options.length === 0) {
         return error(res, 'dropdown and multiselect fields require options array', 400);
@@ -164,6 +197,14 @@ exports.update = async (req, res) => {
         'field_type cannot be changed after creation (would corrupt existing data)',
         400,
       );
+    }
+
+    // Conditional visibility (optional). Coerce {} → null; validate shape.
+    // Only touch it when the client actually sent the key.
+    if ('visibility_condition' in rest) {
+      const vc = normalizeVisibilityCondition(rest.visibility_condition);
+      if (vc.error) return error(res, vc.error, 400);
+      rest.visibility_condition = vc.value;
     }
 
     await def.update(rest);

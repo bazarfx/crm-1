@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { DynamicField } from './DynamicField';
 import { fetchFieldDefinitions, editableFields, useFieldDefinitionsVersion } from '@/lib/dynamic';
+import { isFieldVisible } from '@/lib/conditions';
 import useStore from '@/store/useStore';
 
 // Flat custom-field renderer. We dropped section grouping — fields just sit
@@ -33,9 +34,17 @@ export function DynamicForm({
   // editableFields already applies role-based visibility + edit filtering.
   // Sort by display_order so the form mirrors what the schema editor sees
   // in the reorder UI.
-  const fields = editableFields(definitions, user?.role)
+  const roleFields = editableFields(definitions, user?.role)
     .slice()
     .sort((a, b) => (a.display_order || 100) - (b.display_order || 100));
+
+  // Conditional visibility (Zoho "basic conditions"). Evaluate each field's
+  // `visibility_condition` against the LIVE form values so the form reacts the
+  // instant a driving field changes — a field whose condition is unmet is not
+  // rendered AND not treated as required (it never reaches DynamicField, so it
+  // can't block submit). `values` is the merged form state the parent lifts;
+  // conditions can key on another custom field OR a native column present in it.
+  const fields = roleFields.filter((d) => isFieldVisible(d, values));
 
   if (loading) return <div className="text-xs text-muted-foreground">Loading fields...</div>;
   if (!fields.length) return null;

@@ -46,6 +46,12 @@ FieldDefinition.init(
     options: { type: DataTypes.JSONB, defaultValue: [] },
     validation: { type: DataTypes.JSONB, defaultValue: {} },
     default_value: { type: DataTypes.JSONB, defaultValue: null },
+    // Conditional visibility (Zoho "basic conditions"). null = always visible.
+    // Shape: { field: '<field_key|native_col>', operator: '<op>', value: <any> }.
+    // The field is shown/required ONLY when `values[field] <op> value`. Column
+    // already exists in the DB (nullable); this attribute just serializes it —
+    // it is not a secret.
+    visibility_condition: { type: DataTypes.JSONB, allowNull: true },
     visible_to_roles: {
       type: DataTypes.ARRAY(DataTypes.STRING),
       defaultValue: [
