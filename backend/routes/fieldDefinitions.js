@@ -9,6 +9,9 @@ router.get('/:id', ctrl.getOne);
 router.get('/:id/usage-count', ctrl.usageCount);
 
 router.post('/', ctrl.create);
+// NOTE: /layout must be registered before /:id so the literal path isn't
+// captured as an :id param by the PATCH matcher below.
+router.patch('/layout', ctrl.updateLayout);
 router.patch('/:id', ctrl.update);
 router.delete('/:id', ctrl.hardDelete);
 router.post('/:id/archive', ctrl.archive);

@@ -32,8 +32,11 @@ const TYPES = [
  * types auto-seed two option rows), so building a module's schema is a click
  * per field.
  */
-export function FieldTypePalette({ entityKey }) {
+export function FieldTypePalette({ entityKey, section }) {
   const router = useRouter();
+  // When a section is supplied (layout editor), deep-link the new field into
+  // that section so it lands where the admin clicked "Add field".
+  const sectionQS = section ? `&section=${encodeURIComponent(section)}` : '';
   return (
     <div className="rounded-xl border bg-card p-3">
       <div className="flex items-center gap-1.5 mb-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
@@ -44,7 +47,7 @@ export function FieldTypePalette({ entityKey }) {
           <button
             key={value}
             type="button"
-            onClick={() => router.push(`/settings/fields/new?entity=${entityKey}&type=${value}`)}
+            onClick={() => router.push(`/settings/fields/new?entity=${entityKey}&type=${value}${sectionQS}`)}
             className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md border bg-background text-xs text-muted-foreground hover:text-foreground hover:border-foreground/30 hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
           >
             <Icon className="h-3.5 w-3.5" /> {label}

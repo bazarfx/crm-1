@@ -1,7 +1,7 @@
 'use client';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, Edit, Archive, RotateCcw, ChevronDown, ChevronUp, Eye, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Edit, Archive, RotateCcw, ChevronDown, ChevronUp, Eye, Trash2, Loader2, LayoutGrid } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -149,6 +149,14 @@ function FieldsContent() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => router.push(`/settings/fields/layout?entity=${activeTab}`)}
+          >
+            <LayoutGrid className="h-3.5 w-3.5 mr-1.5" />
+            Layout
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setShowArchived(!showArchived)}>
             <Eye className="h-3.5 w-3.5 mr-1.5" />
             {showArchived ? 'Hide archived' : 'Show archived'}

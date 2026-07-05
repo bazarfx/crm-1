@@ -27,11 +27,12 @@ function NewFieldContent() {
   const sp = useSearchParams();
   const entity = sp.get('entity') || 'lead';
   const type = sp.get('type');
+  const section = sp.get('section');
   const back = () => router.push(`/settings/fields?entity=${entity}`);
 
   return (
     <div className="-mt-1">
-      <FieldEditor entityType={entity} initialType={type} onCancel={back} onSaved={back} />
+      <FieldEditor entityType={entity} initialType={type} initialSection={section} onCancel={back} onSaved={back} />
     </div>
   );
 }

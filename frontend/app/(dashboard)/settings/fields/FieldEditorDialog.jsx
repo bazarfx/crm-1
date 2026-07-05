@@ -74,7 +74,7 @@ const ROLES = [
  * supplied by the thin wrappers below, so the same battle-tested logic runs
  * in both surfaces. `onCancel` replaces the old `onOpenChange(false)`.
  */
-function FieldEditorCore({ field, entityType, initialType, layout = 'dialog', onCancel, onSaved }) {
+function FieldEditorCore({ field, entityType, initialType, initialSection, layout = 'dialog', onCancel, onSaved }) {
   const isEdit = !!field?.id;
   const [form, setForm] = useState({});
   const [usage, setUsage] = useState(null);
@@ -139,7 +139,9 @@ function FieldEditorCore({ field, entityType, initialType, layout = 'dialog', on
         default_value: null,
         visibility_condition: null,
         helper_text: '',
-        section: 'Custom',
+        // Seed from the layout editor's "Add field to this section" deep-link
+        // when present, so the new field lands in the section the admin clicked.
+        section: (!isEdit && initialSection) ? initialSection : 'Custom',
         is_required: false,
         is_filterable: true,
         is_visible_in_list: false,
@@ -153,7 +155,7 @@ function FieldEditorCore({ field, entityType, initialType, layout = 'dialog', on
       });
       setUsage(null);
     }
-  }, [field, entityType, isEdit, initialType]);
+  }, [field, entityType, isEdit, initialType, initialSection]);
 
   // Sibling field definitions for the same entity — the pool of OTHER custom
   // fields a conditional-visibility rule can key on. Loaded once per entity.
@@ -866,13 +868,14 @@ export function FieldEditorDialog({ field, entityType, open, onOpenChange, onSav
  * /settings/fields/[id]. A bounded flex card mirrors the DialogContent layout
  * so the internal two-column scroll + sticky preview behave identically.
  */
-export function FieldEditor({ field, entityType, initialType, onCancel, onSaved }) {
+export function FieldEditor({ field, entityType, initialType, initialSection, onCancel, onSaved }) {
   return (
     <div className="flex flex-col h-[calc(100dvh-7rem)] rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
       <FieldEditorCore
         field={field}
         entityType={entityType}
         initialType={initialType}
+        initialSection={initialSection}
         layout="page"
         onCancel={onCancel}
         onSaved={onSaved}

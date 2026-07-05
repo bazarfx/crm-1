@@ -275,6 +275,87 @@ exports.reorder = async (req, res) => {
   }
 };
 
+// PATCH /field-definitions/layout
+// body: { entity_type, sections?: string[], items: [{ id, section, display_order }] }
+//
+// Bulk-applies a drag-and-drop layout: assigns each field its new `section`
+// and `display_order` in one transaction. This is the persistence half of the
+// visual layout editor (sections + arrange). It ONLY writes `section` and
+// `display_order` — no other column is ever touched, so it can never corrupt
+// field_type, options, permissions, etc.
+//
+// Every id in `items` must be a real field of `entity_type`; a mismatch aborts
+// the whole batch (transaction rollback) so a bad payload can't half-apply.
+// `sections` is accepted for forward-compat (a client may send the canonical
+// section order) but is not persisted separately — sections live implicitly on
+// the fields themselves, so an empty section simply has no members.
+exports.updateLayout = async (req, res) => {
+  if (!requireSchemaRole(req, res)) return;
+  try {
+    const { entity_type, items } = req.body || {};
+    if (!entity_type || typeof entity_type !== 'string') {
+      return error(res, 'entity_type is required', 400);
+    }
+    if (!Array.isArray(items)) {
+      return error(res, 'items must be an array', 400);
+    }
+
+    // Validate the shape up front so we never open a transaction on junk.
+    for (const it of items) {
+      if (!it || typeof it !== 'object' || !it.id) {
+        return error(res, 'each item needs an id', 400);
+      }
+      if (typeof it.section !== 'string' || !it.section.trim()) {
+        return error(res, `item ${it.id} needs a non-empty section`, 400);
+      }
+      if (!Number.isFinite(Number(it.display_order))) {
+        return error(res, `item ${it.id} needs a numeric display_order`, 400);
+      }
+    }
+
+    // Confirm every id actually belongs to this entity before writing — an
+    // id from another entity (or a typo) must not be silently ignored, and
+    // must never let us update a field outside `entity_type`.
+    const ids = items.map((it) => it.id);
+    const owned = await FieldDefinition.findAll({
+      where: { id: ids, entity_type },
+      attributes: ['id'],
+    });
+    const ownedIds = new Set(owned.map((d) => d.id));
+    const foreign = ids.filter((id) => !ownedIds.has(id));
+    if (foreign.length > 0) {
+      return error(
+        res,
+        `These field ids do not belong to ${entity_type}: ${foreign.join(', ')}`,
+        400,
+      );
+    }
+
+    await sequelize.transaction(async (t) => {
+      for (const it of items) {
+        // Whitelist EXACTLY the two layout columns — nothing else can ride
+        // along in this update, even if the client sent extra keys on `it`.
+        await FieldDefinition.update(
+          { section: it.section.trim(), display_order: Number(it.display_order) },
+          { where: { id: it.id, entity_type }, transaction: t },
+        );
+      }
+    });
+
+    invalidateCache();
+
+    // Return the fresh ordered list so the client can reconcile without a
+    // second round-trip.
+    const updated = await FieldDefinition.findAll({
+      where: { entity_type },
+      order: [['display_order', 'ASC'], ['createdAt', 'ASC']],
+    });
+    return success(res, updated, 'Layout saved');
+  } catch (e) {
+    return error(res, e.message, 500);
+  }
+};
+
 // POST /field-definitions/:id/backfill-default
 // Writes the field's current `default_value` into every existing record of
 // the entity where the field is currently missing or null. Returns the

@@ -24,6 +24,18 @@ export async function fetchFieldDefinitions({ force = false, entity_type } = {})
   return entity_type ? (cache.grouped[entity_type] || []) : cache.items;
 }
 
+/**
+ * Persist a drag-and-drop layout for one entity. `items` is a flat list of
+ * { id, section, display_order }. Bumps the registry version on success so any
+ * open form/detail view re-fetches the new order. Returns the server's fresh
+ * ordered list.
+ */
+export async function saveFieldLayout({ entity_type, sections, items }) {
+  const { data } = await api.patch('/field-definitions/layout', { entity_type, sections, items });
+  invalidateFieldDefinitions();
+  return data.data;
+}
+
 export function invalidateFieldDefinitions() {
   cache = { items: null, grouped: {}, at: 0 };
   version += 1;
