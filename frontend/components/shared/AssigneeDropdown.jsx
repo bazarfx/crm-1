@@ -41,6 +41,8 @@ export function AssigneeDropdown({
   const [showAll, setShowAll] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  // Friendly noun for the pool — a comma role ("tele_sales,senior") reads "user".
+  const poolLabel = String(role).includes(',') ? 'user' : String(role).replace(/_/g, ' ');
 
   // Fetch the active-user pool + workload counts. One round-trip each — both
   // cached at the browser level by the api layer, so opening the same picker
@@ -48,14 +50,18 @@ export function AssigneeDropdown({
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    // A comma-separated `role` (e.g. "tele_sales,senior") pulls multiple pools
+    // via the backend's `roles` CSV param; a single role uses `role`.
+    const multi = String(role).includes(',');
+    const poolParams = multi ? { roles: role } : { role };
     Promise.all([
-      api.get('/users', { params: { role, limit: 200, is_active: true } })
+      api.get('/users', { params: { ...poolParams, limit: 200, is_active: true } })
         .then((r) => {
           const p = unwrap(r);
           return Array.isArray(p) ? p : (p?.items || p?.data || []);
         })
         .catch(() => []),
-      api.get('/users/workload', { params: { role } })
+      api.get('/users/workload', { params: poolParams })
         .then((r) => unwrap(r) || [])
         .catch(() => []),
     ]).then(([list, wl]) => {
@@ -160,7 +166,7 @@ export function AssigneeDropdown({
               autoFocus
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={`Search ${role.replace(/_/g, ' ')}s…`}
+              placeholder={`Search ${poolLabel}s…`}
               className="h-9 pl-8 border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
             />
           </div>
@@ -172,7 +178,7 @@ export function AssigneeDropdown({
           )}
           {!loading && grouped.length === 0 && (
             <div className="p-3 text-xs text-muted-foreground">
-              No matching {role.replace(/_/g, ' ')}s.
+              No matching {poolLabel}s.
             </div>
           )}
 
@@ -244,7 +250,7 @@ export function AssigneeDropdown({
               onClick={() => setShowAll(true)}
               className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline w-full text-left"
             >
-              Show all {totalUsers} {role.replace(/_/g, ' ')}s
+              Show all {totalUsers} {poolLabel}s
               {' '}({hiddenCount} don&apos;t speak {labelFor(leadLanguage)})
             </button>
           </div>

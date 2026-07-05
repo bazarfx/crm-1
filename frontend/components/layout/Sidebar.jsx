@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Users, UserCog, Building2, Megaphone,
-  BarChart3, Webhook, Settings, Settings2, X, TrendingUp, LogOut, FlaskConical, Shield, Eye, Award, Undo2, Activity, Route, Network, Boxes,
+  BarChart3, Webhook, Settings, Settings2, X, TrendingUp, LogOut, FlaskConical, Shield, Eye, Award, Undo2, Activity, Route, Network, Boxes, Workflow,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -41,6 +41,7 @@ const NAV_GROUPS = [
       { href: '/groups',    label: 'Groups',    icon: Building2, roles: FM_UP },
       { href: '/campaigns', label: 'Campaigns', icon: Megaphone, roles: FM_UP },
       { href: '/routing',   label: 'Routing',   icon: Route,     roles: ADMIN },
+      { href: '/settings/assignment-rules', label: 'Assignment Rules', icon: Workflow, roles: FM_UP },
     ],
   },
   {
