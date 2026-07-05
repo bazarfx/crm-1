@@ -23,6 +23,11 @@ class User extends Model {
   toSafeJSON() {
     const json = this.toJSON();
     delete json.password;
+    // 2FA material must never leave the server, even if a scope accidentally
+    // included it. Belt-and-suspenders alongside defaultScope exclusion.
+    delete json.two_factor_secret;
+    delete json.two_factor_pending_secret;
+    delete json.two_factor_backup_codes;
     return json;
   }
 }
@@ -91,6 +96,29 @@ User.init(
       allowNull: false,
       comment: 'Dynamic custom fields, structure defined by FieldDefinition registry',
     },
+    // ── Two-factor auth (opt-in TOTP) ─────────────────────────────────────────
+    // These are NEVER serialized: excluded from defaultScope + stripped in
+    // toSafeJSON(). Only readable via the `withTwoFactor` scope on the server.
+    two_factor_enabled: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    two_factor_secret: {
+      // Confirmed base32 TOTP secret. Null until 2FA is enabled.
+      type: DataTypes.STRING(64),
+      allowNull: true,
+    },
+    two_factor_pending_secret: {
+      // Base32 secret generated during /setup but not yet confirmed via /enable.
+      type: DataTypes.STRING(64),
+      allowNull: true,
+    },
+    two_factor_backup_codes: {
+      // Array of bcrypt-hashed one-time backup codes. Null / [] when none.
+      type: DataTypes.JSONB,
+      allowNull: true,
+    },
   },
   {
     sequelize,
@@ -98,10 +126,28 @@ User.init(
     tableName: 'users',
     paranoid: true,
     defaultScope: {
-      attributes: { exclude: ['password'] },
+      // 2FA secrets follow the same rule as `password`: never in default reads.
+      attributes: {
+        exclude: [
+          'password',
+          'two_factor_secret',
+          'two_factor_pending_secret',
+          'two_factor_backup_codes',
+        ],
+      },
     },
     scopes: {
       withPassword: { attributes: { include: ['password'] } },
+      // Server-only: re-includes 2FA material for setup/verify flows.
+      withTwoFactor: {
+        attributes: {
+          include: [
+            'two_factor_secret',
+            'two_factor_pending_secret',
+            'two_factor_backup_codes',
+          ],
+        },
+      },
     },
     indexes: [
       { fields: ['email'], unique: true },

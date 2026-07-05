@@ -26,6 +26,28 @@ function verifyRefreshToken(token) {
   return jwt.verify(token, REFRESH_SECRET);
 }
 
+// ── 2FA challenge token ──────────────────────────────────────────────────────
+// Short-lived token issued after a correct password when the user has 2FA on.
+// It is NOT an access token: it carries { uid, twofa:true } and only lets the
+// bearer complete the second factor at /auth/2fa/verify. Signed with the access
+// secret but tagged `twofa:true` so it can never be mistaken for an access
+// token by verifyToken (which never checks that flag but also never issues it).
+const TWO_FACTOR_CHALLENGE_EXPIRES = process.env.JWT_2FA_CHALLENGE_EXPIRES_IN || '5m';
+
+function signTwoFactorChallenge(userId) {
+  return jwt.sign({ uid: userId, twofa: true }, ACCESS_SECRET, {
+    expiresIn: TWO_FACTOR_CHALLENGE_EXPIRES,
+  });
+}
+
+function verifyTwoFactorChallenge(token) {
+  const payload = jwt.verify(token, ACCESS_SECRET);
+  if (!payload || payload.twofa !== true || !payload.uid) {
+    throw new Error('Not a 2FA challenge token');
+  }
+  return payload;
+}
+
 function parseExpiryToDate(expr) {
   // supports "15m" / "7d" / "1h" / numeric seconds
   if (typeof expr === 'number') return new Date(Date.now() + expr * 1000);
@@ -46,8 +68,11 @@ module.exports = {
   signRefreshToken,
   verifyAccessToken,
   verifyRefreshToken,
+  signTwoFactorChallenge,
+  verifyTwoFactorChallenge,
   refreshTokenExpiry,
   parseExpiryToDate,
   ACCESS_EXPIRES,
   REFRESH_EXPIRES,
+  TWO_FACTOR_CHALLENGE_EXPIRES,
 };

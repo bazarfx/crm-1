@@ -3,10 +3,42 @@ const {
   signAccessToken,
   signRefreshToken,
   verifyRefreshToken,
+  signTwoFactorChallenge,
   refreshTokenExpiry,
 } = require('../utils/jwtUtils');
 const { success, error } = require('../utils/responseHelper');
 const { clientIp } = require('../utils/webhookVerifier');
+
+// Mint the real session (access + refresh + safe user) and persist the refresh
+// token. Shared by normal login AND the 2FA /verify step so both paths produce
+// a byte-for-byte identical session response. Returns the payload object; the
+// caller wraps it with success().
+async function issueSession(req, res, user) {
+  const payload = { sub: user.id, role: user.role, email: user.email };
+  const accessToken = signAccessToken(payload);
+  const { token: refreshToken } = signRefreshToken({ sub: user.id });
+
+  await RefreshToken.create({
+    user_id: user.id,
+    token: refreshToken,
+    expires_at: refreshTokenExpiry(),
+    ip_address: clientIp(req),
+    user_agent: req.headers['user-agent'] || null,
+  });
+
+  user.last_login_at = new Date();
+  await user.save();
+
+  return success(
+    res,
+    {
+      accessToken,
+      refreshToken,
+      user: user.toSafeJSON(),
+    },
+    'Logged in',
+  );
+}
 
 async function login(req, res) {
   const { email, password } = req.body || {};
@@ -35,30 +67,29 @@ async function login(req, res) {
   const ok = await user.comparePassword(password);
   if (!ok) return error(res, 'Invalid credentials', 401);
 
-  const payload = { sub: user.id, role: user.role, email: user.email };
-  const accessToken = signAccessToken(payload);
-  const { token: refreshToken } = signRefreshToken({ sub: user.id });
+  // ── 2FA gate ────────────────────────────────────────────────────────────────
+  // Only when the user has explicitly enabled 2FA. This branch is wrapped so a
+  // failure inside it can NEVER fall through to issuing tokens for a user who
+  // should have been challenged — it returns 500 instead. Users without 2FA
+  // skip this block entirely and get the exact same session as before.
+  if (user.two_factor_enabled === true) {
+    try {
+      const challenge = signTwoFactorChallenge(user.id);
+      return success(
+        res,
+        { two_factor_required: true, challenge },
+        'Two-factor authentication required',
+      );
+    } catch (e) {
+      // Signing failed for a 2FA user: fail closed, do NOT issue real tokens.
+      // eslint-disable-next-line no-console
+      console.error('2FA challenge issuance failed for user', user.id, e);
+      return error(res, 'Unable to start two-factor authentication', 500);
+    }
+  }
 
-  await RefreshToken.create({
-    user_id: user.id,
-    token: refreshToken,
-    expires_at: refreshTokenExpiry(),
-    ip_address: clientIp(req),
-    user_agent: req.headers['user-agent'] || null,
-  });
-
-  user.last_login_at = new Date();
-  await user.save();
-
-  return success(
-    res,
-    {
-      accessToken,
-      refreshToken,
-      user: user.toSafeJSON(),
-    },
-    'Logged in',
-  );
+  // ── Non-2FA users: original behavior, unchanged ──────────────────────────────
+  return issueSession(req, res, user);
 }
 
 async function refresh(req, res) {
@@ -146,4 +177,4 @@ async function changeOwnPassword(req, res) {
   return success(res, null, 'Password changed successfully');
 }
 
-module.exports = { login, refresh, logout, me, changeOwnPassword };
+module.exports = { login, refresh, logout, me, changeOwnPassword, issueSession };
