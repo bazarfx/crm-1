@@ -27,23 +27,41 @@ export const useStore = create()(
         set((s) => ({ user: s.user ? { ...s.user, ...partial } : s.user })),
       markHydrated: () => set({ hydrated: true }),
 
+      /**
+       * Persist a successful login: store tokens + user and derive the
+       * admin/super_admin flags. This is the single source of truth for what
+       * "logged in" means — used by the normal login path AND the 2FA-verify
+       * path (which returns the same { user, accessToken, refreshToken } shape).
+       * Returns the user, mirroring `login`'s original return contract.
+       */
+      finishLogin: (data) => {
+        setTokens({
+          accessToken: data?.accessToken || data?.access_token,
+          refreshToken: data?.refreshToken || data?.refresh_token,
+        });
+        const user = data?.user || null;
+        set({
+          user,
+          isSuperAdmin: user?.role === 'super_admin',
+          isAdmin: user?.role === 'super_admin' || user?.role === 'admin',
+          isLoading: false,
+        });
+        return user;
+      },
+
       login: async (email, password) => {
         set({ isLoading: true });
         try {
           const res = await api.post('/auth/login', { email, password });
           const data = unwrap(res);
-          setTokens({
-            accessToken: data?.accessToken || data?.access_token,
-            refreshToken: data?.refreshToken || data?.refresh_token,
-          });
-          const user = data?.user || null;
-          set({
-            user,
-            isSuperAdmin: user?.role === 'super_admin',
-            isAdmin: user?.role === 'super_admin' || user?.role === 'admin',
-            isLoading: false,
-          });
-          return user;
+          // 2FA-gated accounts return { two_factor_required, challenge } and
+          // NO tokens/user — don't persist anything; hand the challenge back to
+          // the caller (login page) so it can show the code step.
+          if (data?.two_factor_required) {
+            set({ isLoading: false });
+            return { two_factor_required: true, challenge: data.challenge };
+          }
+          return get().finishLogin(data);
         } catch (err) {
           set({ isLoading: false });
           throw err;

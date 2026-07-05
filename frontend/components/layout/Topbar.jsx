@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Menu, LogOut, ChevronDown, Search } from 'lucide-react';
+import { Menu, LogOut, ChevronDown, Search, ShieldCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
@@ -39,6 +40,7 @@ const PAGE_TITLES = [
   ['/settings/roles', 'Roles & hierarchy', 'Dynamic roles and reporting tree'],
   ['/settings/modules/new', 'New module',  'Create a custom module'],
   ['/settings/modules', 'Modules',         'Built-in and custom modules'],
+  ['/settings/security', 'Security',       'Two-factor authentication'],
   ['/settings',       'Settings',          null],
 ];
 
@@ -195,9 +197,16 @@ export default function Topbar({ onMenu }) {
                 <p className="text-xs font-medium truncate">{displayName}</p>
                 <p className="text-[10px] text-muted-foreground truncate">{user?.email || ''}</p>
               </div>
+              <Link
+                href="/settings/security"
+                onClick={() => setMenuOpen(false)}
+                className="w-full text-left text-sm px-3 py-2.5 flex items-center gap-2 hover:bg-muted text-foreground transition-colors duration-150"
+              >
+                <ShieldCheck className="h-3.5 w-3.5" /> Security
+              </Link>
               <button
                 onClick={onLogout}
-                className="w-full text-left text-sm px-3 py-2.5 flex items-center gap-2 hover:bg-muted text-foreground hover:text-red-600 dark:hover:text-red-400 transition-colors duration-150"
+                className="w-full text-left text-sm px-3 py-2.5 flex items-center gap-2 hover:bg-muted text-foreground hover:text-red-600 dark:hover:text-red-400 transition-colors duration-150 border-t"
               >
                 <LogOut className="h-3.5 w-3.5" /> Sign out
               </button>

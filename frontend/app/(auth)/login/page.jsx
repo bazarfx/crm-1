@@ -1,15 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import toast from 'react-hot-toast';
 import {
   Lock, Loader2, Mail, Eye, EyeOff, AlertCircle, LogIn,
-  TrendingUp, ArrowRight, ShieldCheck, Zap, Wallet,
+  TrendingUp, ArrowRight, ShieldCheck, Zap, Wallet, KeyRound,
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { getAccessToken } from '@/lib/auth';
+import { verify2FA } from '@/lib/twoFactor';
 
 const FEATURES = [
   { icon: Zap,         label: 'Round-robin lead routing',          desc: 'Inbound leads land with the right teleseller in milliseconds.' },
@@ -20,12 +21,20 @@ const FEATURES = [
 export default function LoginPage() {
   const router = useRouter();
   const login = useStore((s) => s.login);
+  const storeFinishLogin = useStore((s) => s.finishLogin);
   const hydrated = useStore((s) => s.hydrated);
   const user = useStore((s) => s.user);
 
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(null);
+
+  // Two-factor step state. When `challenge` is set the form switches from
+  // credentials → the 6-digit code entry; nothing is persisted until the code
+  // verifies. `code` holds the numeric input.
+  const [challenge, setChallenge] = useState(null);
+  const [code, setCode] = useState('');
+  const codeRef = useRef(null);
 
   const { register, handleSubmit, formState: { errors } } = useForm({
     defaultValues: { email: '', password: '' },
@@ -37,13 +46,36 @@ export default function LoginPage() {
     }
   }, [hydrated, user, router]);
 
+  // Autofocus the code field the moment we move to the 2FA step.
+  useEffect(() => {
+    if (challenge) codeRef.current?.focus();
+  }, [challenge]);
+
+  /**
+   * The one place a successful login lands — mirrors the original inline
+   * success handling exactly: welcome toast + redirect (change-password when
+   * required, otherwise the dashboard). Used by BOTH the no-2FA path and the
+   * post-verify 2FA path.
+   */
+  const finishLogin = (u) => {
+    toast.success(`Welcome back${u?.first_name ? `, ${u.first_name}` : ''}`);
+    router.push(u?.must_change_password ? '/change-password' : '/dashboard');
+  };
+
   const onSubmit = async ({ email, password }) => {
     setSubmitting(true);
     setError(null);
     try {
-      const u = await login(email.trim(), password);
-      toast.success(`Welcome back${u?.first_name ? `, ${u.first_name}` : ''}`);
-      router.push(u?.must_change_password ? '/change-password' : '/dashboard');
+      const result = await login(email.trim(), password);
+      // 2FA-gated account: the store returns { two_factor_required, challenge }
+      // and has persisted NOTHING. Switch to the code step and stop here.
+      if (result?.two_factor_required) {
+        setChallenge(result.challenge);
+        setCode('');
+        return;
+      }
+      // Normal path — unchanged: `result` is the user object.
+      finishLogin(result);
     } catch (err) {
       const msg = err?.response?.data?.message
         || (err?.code === 'ERR_NETWORK'
@@ -53,6 +85,36 @@ export default function LoginPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const onVerify = async (e) => {
+    e?.preventDefault?.();
+    if (code.length !== 6 || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const data = await verify2FA(challenge, code);
+      // Persist tokens + user through the same store action the normal login
+      // uses, then run the shared success handler.
+      const u = storeFinishLogin(data);
+      finishLogin(u);
+    } catch (err) {
+      const msg = err?.response?.data?.message
+        || (err?.code === 'ERR_NETWORK'
+          ? 'Cannot reach the backend on :5000. Make sure it is running.'
+          : 'That code is not valid. Try again.');
+      setError(msg);
+      setCode('');
+      codeRef.current?.focus();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const backToCredentials = () => {
+    setChallenge(null);
+    setCode('');
+    setError(null);
   };
 
   return (
@@ -150,6 +212,80 @@ export default function LoginPage() {
         </div>
 
         <div className="w-full max-w-sm animate-modalIn">
+          {challenge ? (
+            /* ──────────── TWO-FACTOR STEP ──────────── */
+            <>
+              <div className="mb-6">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/15 text-blue-500 mb-4">
+                  <ShieldCheck size={18} strokeWidth={2.2} />
+                </div>
+                <h2 className="text-[1.75rem] font-semibold tracking-tight text-slate-900 dark:text-white leading-tight">
+                  Two-factor code
+                </h2>
+                <p className="text-sm text-slate-500 dark:text-white/55 mt-1.5">
+                  Enter the 6-digit code from your authenticator app.
+                </p>
+              </div>
+
+              <form onSubmit={onVerify} className="space-y-4">
+                <div>
+                  <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-white/50 mb-1.5">
+                    Authentication code
+                  </label>
+                  <div className="relative">
+                    <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-white/40" />
+                    <input
+                      ref={codeRef}
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      pattern="[0-9]*"
+                      maxLength={6}
+                      placeholder="123456"
+                      value={code}
+                      onChange={(e) => {
+                        setCode(e.target.value.replace(/\D/g, '').slice(0, 6));
+                        if (error) setError(null);
+                      }}
+                      className="w-full h-11 pl-9 pr-3 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] text-lg font-mono tracking-[0.4em] text-slate-900 dark:text-white placeholder:text-slate-300 dark:placeholder:text-white/20 placeholder:tracking-[0.4em] focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50 transition-all"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting || code.length !== 6}
+                  className="group relative w-full h-10 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium inline-flex items-center justify-center gap-2 shadow-[0_8px_20px_-8px_rgba(79,142,247,0.55)] transition-all disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99]"
+                >
+                  {submitting ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" /> Verifying…
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck size={14} /> Verify
+                    </>
+                  )}
+                </button>
+
+                {error && (
+                  <div className="flex items-start gap-2 rounded-lg border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2.5 text-xs text-red-700 dark:text-red-300 animate-modalIn">
+                    <AlertCircle size={13} className="mt-0.5 shrink-0" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={backToCredentials}
+                  className="w-full text-center text-[12px] text-slate-400 dark:text-white/40 hover:text-slate-600 dark:hover:text-white/70 transition-colors"
+                >
+                  ← Back to sign in
+                </button>
+              </form>
+            </>
+          ) : (
+          <>
           <div className="mb-6">
             <h2 className="text-[1.75rem] font-semibold tracking-tight text-slate-900 dark:text-white leading-tight">
               Sign in
@@ -278,6 +414,8 @@ export default function LoginPage() {
           <p className="text-[11px] text-slate-400 dark:text-white/30 text-center mt-6">
             Need access? Contact your <span className="text-slate-600 dark:text-white/55">floor manager</span>.
           </p>
+          </>
+          )}
         </div>
       </div>
     </div>
