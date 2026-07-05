@@ -154,8 +154,10 @@ export default function LeadsPage() {
   const canReassign = isAdminRole || hasPermission('leads.reassign') || can('floor_manager');
 
   const [page, setPage] = useState(1);
-  const [limit] = useState(25);
+  const [limit, setLimit] = useState(25);
   const [search, setSearch] = useState('');
+  // Rows-per-page change resets to page 1 so the new window starts at the top.
+  const changeLimit = useCallback((n) => { setLimit(n); setPage(1); }, []);
   const [filters, setFilters] = useState({});
   const applyFilters = useCallback((next) => { setFilters(next); setPage(1); }, []);
 
@@ -971,9 +973,12 @@ export default function LeadsPage() {
         page={page}
         limit={limit}
         onPageChange={setPage}
+        onLimitChange={changeLimit}
         onSearch={(q) => { setSearch(q); setPage(1); }}
         searchPlaceholder="Search by name, phone, campaign…"
         onRowClick={(r) => router.push(`/leads/${r.id}`)}
+        tableId="leads"
+        allowWrap
       />
     </div>
   );

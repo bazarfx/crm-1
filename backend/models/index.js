@@ -24,6 +24,7 @@ const RoutingRule = require('./RoutingRule');
 const RRPointer = require('./RRPointer');
 const FieldDefinition = require('./FieldDefinition');
 const AssignmentRule = require('./AssignmentRule');
+const SavedView = require('./SavedView');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ASSOCIATIONS
@@ -166,6 +167,12 @@ FieldDefinition.belongsTo(User, { foreignKey: 'archived_by', as: 'archivedBy' })
 // the engine resolves each target by { type, id } at assignment time.
 AssignmentRule.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
 
+// SavedView — Zoho-style saved filters. Owned by the creating user; loosely
+// coupled to its list-entity by `entity_type` string (no FK to Module).
+SavedView.belongsTo(User, { as: 'owner', foreignKey: 'owner_id' });
+SavedView.belongsTo(User, { as: 'createdBy', foreignKey: 'created_by' });
+User.hasMany(SavedView, { foreignKey: 'owner_id', as: 'savedViews' });
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SYNC
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,4 +210,5 @@ module.exports = {
   RRPointer,
   FieldDefinition,
   AssignmentRule,
+  SavedView,
 };
