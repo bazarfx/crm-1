@@ -21,6 +21,7 @@ const {
   recordBypassAudit,
 } = require('../utils/customFieldIntegration');
 const { buildCriteriaWhere } = require('../utils/criteria');
+const { evaluateAssignmentRules } = require('../utils/assignmentEngine');
 const models = require('../models');
 
 // ─── Assignment helpers ───────────────────────────────────────────────────
@@ -249,6 +250,32 @@ async function create(req, res) {
   body.custom_fields = custom_fields;
 
   let assignmentReason = null;
+  let assignmentRuleId = null;
+  const callerSuppliedAssignee = !!body.assigned_to_id;
+
+  if (callerSuppliedAssignee) {
+    // Explicit assignee always wins — neither the rule engine nor the router runs.
+    assignmentReason = 'caller-supplied assignee';
+    if (!body.lead_status) body.lead_status = 'new';
+  } else {
+    // ── Zoho-style Assignment Rules take precedence over the legacy router.
+    // Evaluate against the prospective lead shape (native fields + validated
+    // custom_fields). Fully guarded: any failure leaves body untouched and we
+    // fall through to the existing autoAssignLead cascade below unchanged.
+    try {
+      const ruleMatch = await evaluateAssignmentRules(models, body);
+      if (ruleMatch && ruleMatch.assigneeId) {
+        body.assigned_to_id = ruleMatch.assigneeId;
+        assignmentRuleId = ruleMatch.rule.id;
+        assignmentReason = `assignment rule "${ruleMatch.rule.name}"`;
+        if (!body.lead_status) body.lead_status = 'new';
+      }
+    } catch (_e) {
+      // Never block lead creation on a rule-engine failure.
+    }
+  }
+
+  // No caller assignee and no matching assignment rule → existing cascade.
   if (!body.assigned_to_id) {
     try {
       const assignment = await autoAssignLead({
@@ -270,9 +297,6 @@ async function create(req, res) {
       body.lead_status = 'unassigned';
       assignmentReason = `no auto-assign target (${e.message})`;
     }
-  } else {
-    assignmentReason = 'caller-supplied assignee';
-    if (!body.lead_status) body.lead_status = 'new';
   }
 
   const lead = await Lead.create(body);
@@ -282,6 +306,8 @@ async function create(req, res) {
     activity_type: 'assignment',
     title: 'Lead manually created',
     description: `Created by ${req.user.email}. Assigned via ${assignmentReason}.`,
+    new_value: body.assigned_to_id || null,
+    metadata: assignmentRuleId ? { assignment_rule_id: assignmentRuleId } : null,
   });
   await AuditLog.create({
     user_id: req.user.id,

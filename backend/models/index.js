@@ -23,6 +23,7 @@ const DealUndoRequest = require('./DealUndoRequest');
 const RoutingRule = require('./RoutingRule');
 const RRPointer = require('./RRPointer');
 const FieldDefinition = require('./FieldDefinition');
+const AssignmentRule = require('./AssignmentRule');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ASSOCIATIONS
@@ -160,6 +161,11 @@ RoutingRule.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
 FieldDefinition.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
 FieldDefinition.belongsTo(User, { foreignKey: 'archived_by', as: 'archivedBy' });
 
+// AssignmentRule — Zoho-style ordered assignment rules. `targets` is a
+// polymorphic JSONB array (user/group) so there is no hasMany on either side;
+// the engine resolves each target by { type, id } at assignment time.
+AssignmentRule.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SYNC
 // ─────────────────────────────────────────────────────────────────────────────
@@ -196,4 +202,5 @@ module.exports = {
   RoutingRule,
   RRPointer,
   FieldDefinition,
+  AssignmentRule,
 };

@@ -8,9 +8,11 @@ const {
   IngestLog,
   Setting,
 } = require('../models');
+const models = require('../models');
 const { success, error } = require('../utils/responseHelper');
 const { verifyIngestToken, clientIp } = require('../utils/webhookVerifier');
 const { routeLead } = require('../services/leadRouter');
+const { evaluateAssignmentRules } = require('../utils/assignmentEngine');
 
 // Small TTL cache so we don't hit Settings on every ingest call.
 const SETTING_TTL_MS = 30 * 1000;
@@ -135,6 +137,41 @@ async function ingest(req, res) {
   // Derive language from campaign if not in payload
   const language = data.language || campaign?.language || null;
 
+  // ── Zoho-style Assignment Rules run FIRST, ahead of the legacy router.
+  // Evaluated against the prospective lead shape (native fields the rules can
+  // reference + custom_fields). Fully guarded and run OUTSIDE the ingest
+  // transaction (group targets open their own row-locked RR transactions).
+  // If a rule matches, its assignee wins and routeLead is skipped; otherwise
+  // we fall through to the existing routing cascade completely unchanged.
+  let ruleAssigneeId = null;
+  let ruleName = null;
+  try {
+    const candidate = {
+      first_name: data.first_name,
+      last_name: data.last_name,
+      email: data.email,
+      phone: data.phone,
+      city: data.city,
+      state: data.state,
+      country: data.country,
+      language,
+      lead_source: 'facebook_ads',
+      campaign_name: data.campaign_name,
+      ad_set_name: data.ad_set_name,
+      ad_name: data.ad_name,
+      ad_platform: data.ad_platform,
+      facebook_lead_id: data.facebook_lead_id,
+      custom_fields: {},
+    };
+    const ruleMatch = await evaluateAssignmentRules(models, candidate);
+    if (ruleMatch && ruleMatch.assigneeId) {
+      ruleAssigneeId = ruleMatch.assigneeId;
+      ruleName = ruleMatch.rule.name;
+    }
+  } catch (_e) {
+    // Never block ingest on a rule-engine failure — fall through to router.
+  }
+
   // Routing is now centralized in services/leadRouter.routeLead — it walks
   // admin-configured RoutingRules for (facebook_ads, language), then falls
   // back to language groups → language telesellers → any teleseller. The
@@ -145,18 +182,21 @@ async function ingest(req, res) {
 
   const tx = await sequelize.transaction();
   try {
-    try {
-      routerResult = await routeLead({
-        lead_source: 'facebook_ads',
-        language,
-        campaign_id: campaign?.id || null,
-        transaction: tx,
-      });
-    } catch (e) {
-      routerError = e;
+    // Only consult the router when no assignment rule already claimed the lead.
+    if (!ruleAssigneeId) {
+      try {
+        routerResult = await routeLead({
+          lead_source: 'facebook_ads',
+          language,
+          campaign_id: campaign?.id || null,
+          transaction: tx,
+        });
+      } catch (e) {
+        routerError = e;
+      }
     }
 
-    const ownerId = routerResult?.assignee?.id || null;
+    const ownerId = ruleAssigneeId || routerResult?.assignee?.id || null;
     const groupId = routerResult?.group_id || null;
 
     const lead = await Lead.create(
@@ -190,12 +230,13 @@ async function ingest(req, res) {
         user_id: ownerId || (await getSystemUserId()),
         activity_type: 'assignment',
         title: ownerId
-          ? `Assigned via ${routerResult?.reason || 'round robin'}`
+          ? `Assigned via ${ruleAssigneeId ? `assignment rule "${ruleName}"` : (routerResult?.reason || 'round robin')}`
           : `Unassigned — ${routerError?.message || 'router returned no target'}`,
         new_value: ownerId || null,
         metadata: {
           campaign_id: campaign?.id,
           group_id: groupId,
+          assignment_rule: ruleAssigneeId ? ruleName : null,
           router_reason: routerResult?.reason || null,
           router_error: routerError?.message || null,
         },

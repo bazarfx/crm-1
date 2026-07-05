@@ -17,6 +17,7 @@ router.use('/permissions', require('./permissions'));
 router.use('/roles', require('./roles'));
 router.use('/role-permissions', require('./rolePermissions'));
 router.use('/routing-rules', require('./routingRules'));
+router.use('/assignment-rules', require('./assignmentRules'));
 router.use('/field-definitions', require('./fieldDefinitions'));
 router.use('/modules', require('./modules'));
 router.use('/dashboard', require('./dashboard'));
