@@ -25,6 +25,7 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { DynamicFilterBar } from '@/components/dynamic/DynamicFilterBar';
 import { DynamicCell } from '@/components/dynamic/DynamicCell';
 import { fetchFieldDefinitions, visibleFields } from '@/lib/dynamic';
+import AdvancedFilterPanel from '@/components/filters/AdvancedFilterPanel';
 
 // Status slug → status dot color for the inactive chip state. Mirrors the
 // status palette in CLAUDE.md so chips look right even before the user picks
@@ -158,6 +159,12 @@ export default function LeadsPage() {
   const [filters, setFilters] = useState({});
   const applyFilters = useCallback((next) => { setFilters(next); setPage(1); }, []);
 
+  // Zoho-style advanced criteria (AND/OR rule groups). Serialized to the
+  // `criteria` query param and ANDed with the flat filters above. Additive —
+  // the chip rail + status strip keep working exactly as before.
+  const [criteria, setCriteria] = useState(null);
+  const applyCriteria = useCallback((next) => { setCriteria(next); setPage(1); }, []);
+
   // Custom field definitions for this entity, plus the per-user pick of which
   // ones should render as table columns. Defaults to the schema admin's
   // `is_visible_in_list` flag the first time the user lands on this page.
@@ -262,6 +269,10 @@ export default function LeadsPage() {
           params[k] = filters[k];
         }
       }
+      // Advanced criteria — serialized JSON, ANDed with the flat params above.
+      if (criteria && Array.isArray(criteria.rules) && criteria.rules.length > 0) {
+        params.criteria = JSON.stringify(criteria);
+      }
       const res = await api.get('/leads', { params });
       const payload = unwrap(res);
       const list = Array.isArray(payload) ? payload : (payload?.items || payload?.data || []);
@@ -274,7 +285,7 @@ export default function LeadsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, limit, search, filters]);
+  }, [page, limit, search, filters, criteria]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -674,7 +685,9 @@ export default function LeadsPage() {
   // so we don't repeat the "Leads" h2 here. Instead we lead with the row
   // count chip (the question users actually have when they land) and right-
   // align the actions in a tighter cluster.
-  const hasActiveFilters = Object.values(filters).some((v) => Array.isArray(v) ? v.length : v);
+  const hasCriteria = Array.isArray(criteria?.rules) && criteria.rules.length > 0;
+  const hasActiveFilters = hasCriteria
+    || Object.values(filters).some((v) => Array.isArray(v) ? v.length : v);
 
   // Status chip strip — quick-filter shortcuts. The "All" chip clears the
   // status filter only, leaving other filters intact (language, campaign…).
@@ -700,6 +713,7 @@ export default function LeadsPage() {
   };
   const clearAllFilters = () => {
     setFilters({});
+    setCriteria(null);
     setPage(1);
   };
 
@@ -804,6 +818,7 @@ export default function LeadsPage() {
       <div className="flex flex-wrap items-center gap-1.5">
         <LeadFilterBar filters={filters} onChange={applyFilters} campaigns={campaigns} />
         <DynamicFilterBar entityType="lead" filters={filters} onChange={applyFilters} />
+        <AdvancedFilterPanel value={criteria} onApply={applyCriteria} campaigns={campaigns} />
       </div>
 
       {/* Status quick-filter chip strip. Clicking a chip toggles that status

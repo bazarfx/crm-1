@@ -20,6 +20,8 @@ const {
   isSkipValidationAllowed,
   recordBypassAudit,
 } = require('../utils/customFieldIntegration');
+const { buildCriteriaWhere } = require('../utils/criteria');
+const models = require('../models');
 
 // ─── Assignment helpers ───────────────────────────────────────────────────
 // Leads are ASSIGNED to a user — not owned. These helpers reflect that.
@@ -144,7 +146,16 @@ async function list(req, res) {
   // values are passed through sequelize.where with bind parameters.
   // Qualify with "Lead" because INCLUDE_ASSIGNEE joins users (which also
   // has a custom_fields column post-AA migration).
-  const finalWhere = await applyCustomFieldFilters(where, req.query, 'Lead', 'lead');
+  let finalWhere = await applyCustomFieldFilters(where, req.query, 'Lead', 'lead');
+
+  // Zoho-style advanced criteria filter. `?criteria=<JSON>` (see utils/criteria.js)
+  // is ADDITIVE — it ANDs onto the scope + flat params + cf_ clauses above. A
+  // malformed/empty criteria returns null and leaves the existing WHERE intact,
+  // so no existing filter behaviour changes.
+  const criteriaWhere = buildCriteriaWhere(models, 'lead', req.query.criteria);
+  if (criteriaWhere) {
+    finalWhere = { [Op.and]: [finalWhere, criteriaWhere] };
+  }
 
   // `distinct: true` + `col: 'id'` makes Sequelize count distinct lead IDs
   // rather than the join-multiplied row count from INCLUDE_ASSIGNEE.
