@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, Download, Phone, Mail, Copy, CheckCircle2, X, AlertTriangle, Columns3 } from 'lucide-react';
+import { Plus, Download, Phone, Mail, Copy, CheckCircle2, X, AlertTriangle, Columns3, SlidersHorizontal } from 'lucide-react';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -26,6 +26,7 @@ import { DynamicFilterBar } from '@/components/dynamic/DynamicFilterBar';
 import { DynamicCell } from '@/components/dynamic/DynamicCell';
 import { fetchFieldDefinitions, visibleFields } from '@/lib/dynamic';
 import AdvancedFilterPanel from '@/components/filters/AdvancedFilterPanel';
+import FilterSidebar from '@/components/filters/FilterSidebar';
 
 // Status slug → status dot color for the inactive chip state. Mirrors the
 // status palette in CLAUDE.md so chips look right even before the user picks
@@ -166,6 +167,31 @@ export default function LeadsPage() {
   // the chip rail + status strip keep working exactly as before.
   const [criteria, setCriteria] = useState(null);
   const applyCriteria = useCallback((next) => { setCriteria(next); setPage(1); }, []);
+
+  // Zoho-style left filter sidebar (Saved Views + field criteria builder). It's
+  // an ADDITIONAL power surface — the horizontal LeadFilterBar rail, status
+  // strip, and AdvancedFilterPanel all keep working; the sidebar shares the
+  // SAME `filters` + `criteria` state through this handler. Applying a saved
+  // view (or editing a field condition) writes straight back into that state,
+  // so the rail/strip/panel re-render to reflect it. Open state is remembered.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem('crm1.filterSidebar.leads') === '1') setSidebarOpen(true);
+    } catch { /* ignore */ }
+  }, []);
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((open) => {
+      const next = !open;
+      try { window.localStorage.setItem('crm1.filterSidebar.leads', next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+  const handleSidebarApply = useCallback((next) => {
+    if (next?.filters !== undefined) setFilters(next.filters ?? {});
+    if (next?.criteria !== undefined) setCriteria(next.criteria ?? null);
+    setPage(1);
+  }, []);
 
   // Custom field definitions for this entity, plus the per-user pick of which
   // ones should render as table columns. Defaults to the schema admin's
@@ -683,6 +709,17 @@ export default function LeadsPage() {
     customDefs, visibleColumns,
   ]);
 
+  // Column keys currently shown in the table — captured into a saved view so
+  // reopening it can (later) restore the same column set. We skip the internal
+  // selection gutter (`__select`).
+  const currentColumns = useMemo(
+    () => columns.map((c) => c.accessorKey || c.id).filter((k) => k && k !== '__select'),
+    [columns],
+  );
+  // The list defaults to created_at DESC server-side; expose that as the view's
+  // sort so a restored view lands on the same ordering.
+  const currentSort = useMemo(() => ({ field: 'created_at', dir: 'DESC' }), []);
+
   // Action-bar level layout: topbar already shows the page title + subtitle,
   // so we don't repeat the "Leads" h2 here. Instead we lead with the row
   // count chip (the question users actually have when they land) and right-
@@ -759,7 +796,20 @@ export default function LeadsPage() {
       )}
 
       <div className="flex flex-wrap items-center gap-3 justify-between">
-        <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="inline-flex items-center gap-2.5 text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-pressed={sidebarOpen}
+            className={cn(
+              'inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-xs font-medium transition-colors',
+              sidebarOpen
+                ? 'border-primary/40 bg-primary/5 text-foreground'
+                : 'border-border bg-card/50 text-muted-foreground hover:text-foreground hover:border-foreground/20',
+            )}
+          >
+            <SlidersHorizontal size={14} /> Filters
+          </button>
           <span className="mono tabular-nums font-medium text-foreground">
             {total.toLocaleString('en-IN')}
           </span>
@@ -812,6 +862,25 @@ export default function LeadsPage() {
           )}
         </div>
       </div>
+
+      {/* When the sidebar is open the below-header content splits into two
+          columns: the Zoho FilterSidebar on the left and the existing rail +
+          status strip + table on the right. When closed the right column is the
+          only child, so the layout is byte-for-byte what it was before. */}
+      <div className={cn(sidebarOpen ? 'flex items-start gap-4' : 'contents')}>
+        {sidebarOpen && (
+          <FilterSidebar
+            entityType="lead"
+            filters={filters}
+            criteria={criteria}
+            onApply={handleSidebarApply}
+            currentColumns={currentColumns}
+            currentSort={currentSort}
+            campaigns={campaigns}
+          />
+        )}
+
+        <div className={cn(sidebarOpen ? 'flex-1 min-w-0 space-y-4' : 'contents')}>
 
       {/* Horizontal filter rail — native lead filters (Language, Source,
           Campaign, Date, ARK/FTD) as inline popover-chips, followed by the
@@ -980,6 +1049,8 @@ export default function LeadsPage() {
         tableId="leads"
         allowWrap
       />
+        </div>
+      </div>
     </div>
   );
 }
